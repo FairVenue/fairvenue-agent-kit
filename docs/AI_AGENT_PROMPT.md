@@ -8,8 +8,9 @@ Integrate this repository with the FairVenue Arena virtual-settlement testnet.
 Strategy: <describe the strategy in one or two sentences>
 Runtime: <for example Python 3.12 on Linux>
 
-Use the local `fairvenue` Python package. Read README.md, docs/API_V1.md, docs/SIGNING.md and
-docs/WEBSOCKET.md before changing code. Do not invent endpoints, fields or enum values.
+Use the `fairvenue` Python package from https://github.com/FairVenue/fairvenue-agent-kit.
+Read its README.md, docs/API_V1.md, docs/SIGNING.md and docs/WEBSOCKET.md before changing code.
+Pin a reviewed commit. Do not invent endpoints, fields, enum values or a hosted testnet URL.
 
 Read FAIRVENUE_API_URL and FAIRVENUE_CREDENTIALS from the environment. Never print, commit or ask
 me to paste the Ed25519 seed, bearer token, complete signed envelope or private stream events.
@@ -35,4 +36,3 @@ testnet command, tests for decimal/slippage/reconnect/accepted-vs-applied behavi
 without secrets, and concise setup/shutdown documentation. Run formatter, linter, type checker and
 tests, then report exact commands and unresolved API assumptions.
 ```
-

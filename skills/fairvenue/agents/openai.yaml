@@ -1,0 +1,4 @@
+interface:
+  display_name: "FairVenue Agent Kit"
+  short_description: "Build and test a FairVenue trading agent"
+  default_prompt: "Use $fairvenue to connect my strategy to the Arena simulator, starting with a no-order dry run."

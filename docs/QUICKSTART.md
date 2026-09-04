@@ -3,6 +3,8 @@
 ## 1. Install
 
 ```bash
+git clone https://github.com/FairVenue/fairvenue-agent-kit.git
+cd fairvenue-agent-kit
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[dev]'
@@ -10,7 +12,11 @@ python -m pip install -e '.[dev]'
 
 ## 2. Start the local Arena backend
 
-From the FairVenue monorepo:
+Only if you already have an authorized local backend checkout. The backend is not bundled in
+this repository. Otherwise use an operator-provided Arena URL and the hosted access steps below;
+do not assume a public testnet hostname is available.
+
+From your backend checkout:
 
 ```bash
 cd arena-backend
@@ -60,7 +66,16 @@ transaction projection before reporting the result.
 
 ## Hosted access
 
-Do not call `init-local`, reset or faucet against a hosted testnet. Sign in to Arena, open
+Use the Arena URL provided with your access. Do not call `init-local`, reset or faucet against a
+hosted testnet. Sign in to Arena, open
 **System**, choose **Create API key**, and download the JSON once. FairVenue stores only the
 public key. Move the file to an encrypted owner-only location, apply `chmod 600 <file>` on Linux or
 macOS, and run `fairvenue verify` before starting a strategy.
+
+```bash
+fairvenue verify --credentials /secure/path/arena-agent.json
+```
+
+`FAIRVENUE_CREDENTIALS` is a file path, not a private key. `.env.example` documents the environment
+variables; the examples read the environment and do not automatically load a `.env` file. For
+public examples, set `FAIRVENUE_API_URL` to your operator-provided base URL.

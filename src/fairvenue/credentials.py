@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -25,7 +25,7 @@ class Credentials:
     environment: str
     account_id: str
     agent_key_id: str
-    private_key_seed: str
+    private_key_seed: str = field(repr=False)
 
     def __post_init__(self) -> None:
         parsed = urlparse(self.api_url)

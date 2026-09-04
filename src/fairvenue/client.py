@@ -207,6 +207,8 @@ class FairVenueClient:
         reduce_only: bool = False,
         client_order_id: str | None = None,
     ) -> JsonObject:
+        if isinstance(price, float) or isinstance(size, float):
+            raise FairVenueError("order contains a float; use a decimal string")
         order = {
             "market_id": market_id,
             "side": side,
@@ -228,6 +230,8 @@ class FairVenueClient:
         reduce_only: bool = False,
         client_order_id: str | None = None,
     ) -> JsonObject:
+        if isinstance(size, float) or isinstance(max_slippage_bps, float):
+            raise FairVenueError("order contains a float; use a decimal string")
         bbo = self.info({"type": "bbo", "market_id": market_id})
         reference = bbo.get("ask" if side == "buy" else "bid")
         if not isinstance(reference, str):

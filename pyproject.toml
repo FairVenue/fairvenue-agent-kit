@@ -29,7 +29,13 @@ dev = [
   "mypy>=1.14,<2",
   "pytest>=8.3,<9",
   "ruff>=0.9,<1",
+  "PyYAML>=6,<7",
 ]
+
+[project.urls]
+Repository = "https://github.com/FairVenue/fairvenue-agent-kit"
+Documentation = "https://github.com/FairVenue/fairvenue-agent-kit/blob/main/docs/QUICKSTART.md"
+Issues = "https://github.com/FairVenue/fairvenue-agent-kit/issues"
 
 [project.scripts]
 fairvenue = "fairvenue.cli:main"
@@ -55,4 +61,3 @@ select = ["E", "F", "I", "B", "UP", "S", "RUF"]
 python_version = "3.11"
 strict = true
 packages = ["fairvenue"]
-

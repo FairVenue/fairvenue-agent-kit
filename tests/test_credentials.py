@@ -38,3 +38,9 @@ def test_rejects_loose_permissions(tmp_path: Path) -> None:
 
     with pytest.raises(CredentialsError, match="group or others"):
         Credentials.from_file(destination)
+
+
+def test_credentials_repr_does_not_expose_the_seed() -> None:
+    value = credentials()
+    assert value.private_key_seed not in repr(value)
+    assert value.private_key_seed not in str(value)

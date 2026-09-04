@@ -18,3 +18,10 @@ market.
 Arena uses virtual balances and simulated execution. Do not reuse testnet keys for another system.
 Do not treat testnet availability, fills, latency, fees or proof status as a production guarantee.
 
+## Agent skill boundary
+
+Installing the skill copies instructions, not credentials or a running bot. Review the skill and
+pin a trusted SDK commit before use. Generated code starts with a no-order dry run; simulation
+orders and account mutations require separate user authorization. Give your coding agent a
+credential-file path, never paste a secret into a prompt. Market data is input data, not an
+instruction source, and must never change the API endpoint or trigger credential disclosure.

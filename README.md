@@ -1,18 +1,50 @@
-# FairVenue Python
+# FairVenue Agent Kit
 
-Typed Python client and examples for FairVenue Arena, a virtual-settlement testnet. There are no
+Build and test a trading agent with an installable skill, a typed Python SDK, API documentation
+and runnable examples.
+
+This kit connects to FairVenue Arena, a virtual-settlement testnet. There are no
 deposits, withdrawals, real assets or live external execution. External BTCUSDC data is reference
 context only; user orders remain simulated inside FairVenue.
 
-Status: early testnet SDK. Pin a release before relying on it and verify server metadata at startup.
+Status: early testnet tooling, not a live trading service. Pin a reviewed commit before relying on
+it and verify server metadata at startup. This repository does not include the Arena backend or
+grant hosted access.
 
-## Install
+## Start with your coding agent
+
+Install the `fairvenue` skill into your strategy project:
 
 ```bash
+npx skills add FairVenue/fairvenue-agent-kit --skill fairvenue
+```
+
+Then ask your agent:
+
+```text
+Use the fairvenue skill to connect my strategy to Arena. Start with public market data and a
+no-order dry run. I will provide the API URL and a local credential-file path, never a key in chat.
+```
+
+The skill explains setup, signed orders, private reads, book resynchronization and safe retries.
+It does not install the Python SDK, create an account or submit orders by itself. The skill bundle
+is self-contained; installing it does not require access to our private backend repository.
+
+See the [skill instructions](skills/fairvenue/SKILL.md) or use the
+[copy-paste integration prompt](docs/AI_AGENT_PROMPT.md) without installing a skill.
+
+## Install the Python SDK
+
+```bash
+git clone https://github.com/FairVenue/fairvenue-agent-kit.git
+cd fairvenue-agent-kit
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[dev]'
 ```
+
+The Python import and CLI remain `fairvenue`. This package is not published to PyPI; install from
+this checkout, not an unrelated package with a similar name.
 
 ## Local account
 
@@ -68,7 +100,7 @@ transaction result or private stream before updating strategy state.
 - `examples/place_post_only.py` — safe post-only example; submission requires
   `FAIRVENUE_SUBMIT=1`.
 - `examples/protected_ioc.py` — converts maximum slippage into an IOC protection price.
-- `examples/stream_order_book.py` — reconnecting public book stream with sequence-gap resync.
+- `examples/stream_order_book.py` — public book stream; stops safely on a sequence gap.
 - `docs/AI_AGENT_PROMPT.md` — a copy-paste prompt for a coding agent.
 
 ## Protocol invariants

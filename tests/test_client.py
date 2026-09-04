@@ -41,6 +41,24 @@ def test_rejects_float_money_before_transport() -> None:
         )
 
 
+@pytest.mark.parametrize("field", ["price", "size", "max_slippage_bps"])
+def test_helpers_do_not_convert_float_inputs_before_validation(field: str) -> None:
+    def transport(_: httpx.Request) -> httpx.Response:
+        raise AssertionError("Invalid money must fail before any request")
+
+    with (
+        FairVenueClient.from_credentials(
+            credentials(), transport=httpx.MockTransport(transport)
+        ) as client,
+        pytest.raises(FairVenueError, match="contains a float"),
+    ):
+        if field == "max_slippage_bps":
+            client.protected_ioc(market_id=0, side="buy", size="0.001", max_slippage_bps=0.5)
+        else:
+            values = {"price": "100.1", "size": "0.001", field: 0.5}
+            client.place_limit(market_id=0, side="buy", **values)
+
+
 def test_authenticates_private_read_and_never_sends_seed() -> None:
     requests: list[dict[str, object]] = []
 
