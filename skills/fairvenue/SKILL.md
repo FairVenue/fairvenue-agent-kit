@@ -17,7 +17,7 @@ and runtime. Use an existing operator-provided URL; do not guess a testnet hostn
 unavailable, implement and test against mocks rather than inventing a live connection.
 
 If the user has no bot credential file, ask them to open **System → Create API key → Download
-credentials** in Arena and save the JSON securely. Ask them to share only the file path with the
+JSON** in Arena and save the file securely. Ask them to share only the file path with the
 local coding agent, not to paste or upload the private key. Explain these steps before waiting
 for credentials; public-read development can continue without them.
 
