@@ -1,0 +1,22 @@
+{
+  "account_id": "acc_00000000000000000000000000000001",
+  "agent_key_id": "agent_00000000000000000000000000000001",
+  "nonce": 1786800000123,
+  "expires_after": 1786800005123,
+  "action": {
+    "type": "order",
+    "orders": [
+      {
+        "market_id": 0,
+        "side": "buy",
+        "price": "100000.0",
+        "size": "0.0100",
+        "time_in_force": "Alo",
+        "reduce_only": false,
+        "client_order_id": "0x1234567890abcdef1234567890abcdef"
+      }
+    ]
+  },
+  "signature": "0xbe5b371ea03febb841a5b507e65025fe9e8bd30cbd88ee48c240bedbc8dc0bc74fed410ba4654808cd44167b03470d823ceb27cec6bd1fb96b7e0c3a01ff5906"
+}
+
