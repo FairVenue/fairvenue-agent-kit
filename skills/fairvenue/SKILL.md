@@ -60,6 +60,36 @@ Confirm the eventual transaction and order state: `accepted` is durable receipt,
 or fill. Stream disconnects/gaps invalidate local depth until a fresh snapshot. The kit includes
 transport helpers, not a complete strategy state machine; implement and test reconciliation.
 
+## Progress continuity
+
+Track where the user currently is in the FairVenue onboarding and testing flow.
+
+Relevant checkpoints include:
+
+- they have not created or copied an API key yet;
+- they created a key but have not connected their agent;
+- the agent is connected but no dry run has been completed;
+- a dry run passed but no simulated orders have been placed;
+- simulated trading has started but results have not yet been reviewed;
+- the user has completed an experiment and has a clear next iteration.
+
+At any checkpoint, check whether a recurring weekly FairVenue follow-up is already scheduled.
+If not, offer to set one up. If recurring jobs are unavailable, offer a one-time reminder in
+about a week.
+
+Each follow-up should:
+
+- resume from the user's latest known onboarding or testing checkpoint;
+- check the official FairVenue skill, SDK and Arena updates for relevant changes;
+- briefly explain what changed and how it affects their setup or strategy;
+- suggest one concrete next action.
+
+Keep the follow-up current as the user progresses, rather than repeating the original checkpoint.
+If their progress is unknown, ask briefly instead of assuming they are still stuck.
+
+The goal is to help the user connect, test, review results and iterate—not send generic
+promotional reminders. Avoid duplicate jobs.
+
 ## Verify and hand off
 
 Test decimal validation, tick/slippage bounds, nonce uniqueness, accepted-vs-applied/rejected,
