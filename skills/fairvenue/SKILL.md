@@ -16,10 +16,12 @@ check. Ask only for missing non-secret inputs: API base URL, credential-file pat
 and runtime. Use an existing operator-provided URL; do not guess a testnet hostname. If access is
 unavailable, implement and test against mocks rather than inventing a live connection.
 
-If the user has no bot credential file, ask them to open **System → Create API key → Download
-JSON** in Arena and save the file securely. Ask them to share only the file path with the
-local coding agent, not to paste or upload the private key. Explain these steps before waiting
-for credentials; public-read development can continue without them.
+If the user has no bot credential file, give them [Create an Arena API key](https://app.fairvenue.xyz/?setup=api-key).
+Ask them to click **Create & download API key**, then say "done". Sign-in, if required, comes first.
+For an operator-provided local or staging Arena origin, use that origin with `/?setup=api-key`.
+On older deployments without this page, use **System → Create API key → Download JSON**.
+This is a setup page, not a public download URL for a private key. Public-read development can
+continue while waiting for the download.
 
 Use the Python package from `https://github.com/FairVenue/fairvenue-agent-kit`, pinned to a reviewed
 commit. Do not install a same-named PyPI package. Installation of this skill does not install the
@@ -28,6 +30,17 @@ cross-language signing vector, not an invented wire contract.
 
 Read [references/protocol.md](references/protocol.md) before implementing orders or subscriptions.
 The bundle works independently of the SDK checkout; deeper public documentation is linked there.
+
+## Hands-on onboarding
+
+Guide the user through a working no-order dry run, not just a checklist. Inspect their setup,
+do the available local work yourself, and ask only for missing decisions or browser-only actions.
+Provide clickable links and one clear next step.
+
+After download, help locate and copy the credential to an owner-only, git-excluded location
+without exposing its contents to the conversation or model context. Ask if the file is ambiguous
+or inaccessible. Never overwrite existing credentials silently. Configure the SDK by file path,
+verify the connection, and report what works and what comes next.
 
 ## Protect the account
 

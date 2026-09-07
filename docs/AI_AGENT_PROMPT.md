@@ -15,6 +15,11 @@ Pin a reviewed commit. Do not invent endpoints, fields, enum values or a hosted 
 Read FAIRVENUE_API_URL and FAIRVENUE_CREDENTIALS from the environment. Never print, commit or ask
 me to paste the Ed25519 seed, bearer token, complete signed envelope or private stream events.
 
+If I need a bot key, give me https://app.fairvenue.xyz/?setup=api-key (or the operator-provided
+Arena origin with /?setup=api-key) and ask me to click Create & download API key, then say "done".
+Help locate and secure the downloaded file without exposing its contents to chat or model context.
+Handle available local setup yourself and guide me through the first no-order dry run.
+
 Requirements:
 - Arena is a simulator. Never send user orders or credentials to Binance or another venue.
 - External BTCUSDC data is reference context only.

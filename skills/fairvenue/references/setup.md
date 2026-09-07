@@ -6,8 +6,10 @@ Clone `https://github.com/FairVenue/fairvenue-agent-kit` into an appropriate too
 the reviewed commit and install it in the project's Python 3.11+ virtual environment. For example,
 from that checkout: `python -m pip install -e .`. No PyPI release is advertised.
 
-For hosted access, use the URL supplied by the operator. The user signs into Arena, opens
-**System → Create API key**, and downloads the credential JSON once. The browser generates the
+For hosted access, give the user [Create an Arena API key](https://app.fairvenue.xyz/?setup=api-key)
+and ask them to click **Create & download API key**. Use an operator-provided local/staging origin
+instead when applicable. Older deployments keep **System → Create API key → Download JSON**.
+The user signs in first if necessary. The browser generates the
 key; the server receives only its public half. Move the file outside source control to an
 owner-only location (`0600` on Linux/macOS). No private key belongs in the conversation.
 
