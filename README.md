@@ -3,13 +3,20 @@
 Build and test a trading agent with an installable skill, a typed Python SDK, API documentation
 and runnable examples.
 
-This kit connects to FairVenue Arena, a virtual-settlement testnet. There are no
-deposits, withdrawals, real assets or live external execution. External BTCUSDC data is reference
-context only; user orders remain simulated inside FairVenue.
+This kit has two explicitly separate modes. The root `fairvenue` SDK below connects to the
+legacy virtual-settlement Arena; it has no deposits, withdrawals or real assets. The separate
+native package connects only to an independently approved custodial mock-token TESTNET.
+Neither mode routes user orders or credentials to an external venue.
 
 Status: early testnet tooling, not a live trading service. Pin a reviewed commit before relying on
 it and verify server metadata at startup. This repository does not include the Arena backend or
 grant hosted access.
+
+The separate [experimental native TESTNET package](docs/NATIVE_TESTNET.md) provides
+`fairvenue_schema6.NativeTestnetClient` for an independently approved mock-token
+deployment. The skill selects the native or V0 branch only from explicit installation approval.
+The native package is not the virtual SDK below, does not accept V0 credentials, and
+does not establish hosted funding, liquidity, proof verification or release readiness.
 
 ## Start with your coding agent
 
@@ -33,7 +40,7 @@ is self-contained; installing it does not require access to our private backend 
 See the [skill instructions](skills/fairvenue/SKILL.md) or use the
 [copy-paste integration prompt](docs/AI_AGENT_PROMPT.md) without installing a skill.
 
-## Install the Python SDK
+## Install the legacy virtual Python SDK
 
 ```bash
 git clone https://github.com/FairVenue/fairvenue-agent-kit.git

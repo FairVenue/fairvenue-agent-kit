@@ -1,0 +1,5 @@
+# Independently review these exact isolated primitive packages before activation.
+PyNaCl==1.6.2
+pycryptodome==3.24.0
+cffi==2.1.1
+pycparser==3.0

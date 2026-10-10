@@ -26,3 +26,21 @@ jobs:
       - run: pytest
       - run: python -m build
 
+  experimental-native:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: experimental/native-testnet/requirements.txt
+      - run: python -m pip install ./experimental/native-testnet build
+      - name: Offline native codec, credential and continuity tests only
+        run: >-
+          PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=experimental/native-testnet
+          python -m unittest discover -s experimental/native-testnet/tests -v
+      - run: python -m build experimental/native-testnet

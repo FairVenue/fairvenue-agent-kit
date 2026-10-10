@@ -1,6 +1,10 @@
 # API decisions that matter
 
-Use only the FairVenue-native trading surface:
+This page describes the **legacy V0 virtual Arena** API, not the separate mock-token protocol.
+Native TESTNET agents must use [native-testnet.md](native-testnet.md). Native `/api/v1` aliases
+do not convert V0 signatures, nonces or credentials; a matching hostname grants no compatibility.
+
+Use only the V0 Arena surface for explicitly approved virtual settlement:
 
 | Surface | SDK entry | Boundary |
 | --- | --- | --- |

@@ -1,0 +1,29 @@
+{
+  "schema": "fairvenue-native-testnet-installation-v1",
+  "environment": "TESTNET",
+  "settlement_mode": "mock_token_sp1_operator_beta",
+  "chain_id": 421614,
+  "settlement": "0x0bc610637d5d36bbda873e1175bcb6e9377d3606",
+  "mock_token": "0xa249d1a0a99071dfc47c9b3426a6186e3c24baba",
+  "api_namespace": "/v1",
+  "api_url": "https://app.fairvenue.xyz/",
+  "agent_policy": {
+    "absolute_error_ms": "5",
+    "config_version": "3",
+    "domain": {
+      "chain_id": 421614,
+      "settlement": [11, 198, 16, 99, 125, 93, 54, 187, 218, 135, 62, 17, 117, 188, 182, 233, 55, 125, 54, 6]
+    },
+    "epoch_ms": "10",
+    "gateways": [
+      {"end_epoch": "182286720000", "first_epoch": "0", "gateway_id": 1, "key_id": 2147483649, "public_key": "0x65d21c2153284a0a01f7edbbf27a828ce926257a4102eb795017f683473532a1"},
+      {"end_epoch": "182286720000", "first_epoch": "0", "gateway_id": 2, "key_id": 2147483650, "public_key": "0x48560b37756b6988a249dc5bb2f2dea8eafe850b5161a50688acb0f4bf1f5a3b"},
+      {"end_epoch": "182286720000", "first_epoch": "0", "gateway_id": 3, "key_id": 2147483651, "public_key": "0xd030eb5bef6300e6978394f3e9a82d0460314f6bc75522986f02286924460fc3"}
+    ],
+    "market_id": [179, 6, 184, 178, 35, 30, 170, 2, 182, 226, 148, 185, 111, 192, 184, 210, 231, 206, 133, 230, 44, 185, 43, 223, 249, 60, 235, 26, 234, 86, 110, 150],
+    "max_disagreement_epochs": "1",
+    "max_lifetime_epochs": "1000",
+    "max_oracle_age_ms": "30000",
+    "max_oracle_future_ms": "1000"
+  }
+}

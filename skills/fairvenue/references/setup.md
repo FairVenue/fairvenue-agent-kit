@@ -1,5 +1,10 @@
 # Connect without placing an order
 
+This page is the **legacy V0 virtual-settlement** flow. For an independently approved native
+TESTNET deployment and `fairvenue-native-testnet-agent-v1` file, use
+[the native setup](native-testnet.md), not these SDK/credential commands. Never infer the mode
+from the hostname, copy a V0 key into native custody, or fall back when native setup fails.
+
 ## SDK and access
 
 Clone `https://github.com/FairVenue/fairvenue-agent-kit` into an appropriate tools directory, record

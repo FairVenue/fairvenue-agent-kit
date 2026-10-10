@@ -1,0 +1,120 @@
+{
+  "schema": "fairvenue-v1-agent-context-golden-v1",
+  "policy": {
+    "domain": {
+      "chain_id": 421614,
+      "settlement": [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9]
+    },
+    "market_id": [
+      8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8
+    ],
+    "config_version": "2",
+    "epoch_ms": "100",
+    "absolute_error_ms": "20",
+    "max_disagreement_epochs": "1",
+    "max_lifetime_epochs": "100",
+    "max_oracle_age_ms": "1000",
+    "max_oracle_future_ms": "0",
+    "gateways": [
+      {
+        "gateway_id": 1,
+        "key_id": 1,
+        "public_key": "0x8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+        "first_epoch": "0",
+        "end_epoch": "18446744073709551615"
+      },
+      {
+        "gateway_id": 2,
+        "key_id": 2,
+        "public_key": "0x8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+        "first_epoch": "0",
+        "end_epoch": "18446744073709551615"
+      },
+      {
+        "gateway_id": 3,
+        "key_id": 3,
+        "public_key": "0xed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1",
+        "first_epoch": "0",
+        "end_epoch": "18446744073709551615"
+      }
+    ]
+  },
+  "public_grant": {
+    "schema": "fairvenue-v1-agent-public-grant-v1",
+    "chainId": "421614",
+    "settlement": "0x0909090909090909090909090909090909090909",
+    "owner": "0x0404040404040404040404040404040404040404",
+    "account": "0x0000000000000000000000000000000000000000000000000000000000000007",
+    "agentPublicKey": "0x2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+    "permissions": 15,
+    "delegationNonce": "1",
+    "issuedAtMs": "0",
+    "expiresAtMs": "40000",
+    "maxExpiryMs": "40000",
+    "canWithdraw": false
+  },
+  "request": {
+    "schema": "fairvenue-v1-agent-context-request-v1",
+    "chain_id": 421614,
+    "settlement": "0x0909090909090909090909090909090909090909",
+    "agent_public_key": "0x2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+    "challenge": "0x5555555555555555555555555555555555555555555555555555555555555555",
+    "signature": "0xedcbd3ace5fe0e3fad60eed3d6c4f53d1ad523111bad574dc75349a56d6dffb6649552718184e84c010bd7ec7418d79c0c302667fd38c754881018e768ffa507"
+  },
+  "policy_hash": "0x602f11acab7a47d16eddc9aa53dac6ed68fa1e9527ec2d5cbbcfc06dbce48095",
+  "signing_bytes": "0x4661697256656e75652e56312e4167656e74436f6e74657874526571756573742e7631000000000000066eee09090909090909090909090909090909090909092152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db125555555555555555555555555555555555555555555555555555555555555555",
+  "session_scope": "174e0453babff632b7dcb8a2b830f0a724b9cb7d8b6e577c6536be8f09dcf7fc",
+  "response": {
+    "schema": "fairvenue-v1-agent-context-v1",
+    "status": "canonical_prepared_agent_context_not_final",
+    "challenge": "0x5555555555555555555555555555555555555555555555555555555555555555",
+    "context": {
+      "authenticated": true,
+      "session_scope": "174e0453babff632b7dcb8a2b830f0a724b9cb7d8b6e577c6536be8f09dcf7fc",
+      "owner": "0x0404040404040404040404040404040404040404",
+      "prefix": {
+        "domain": {
+          "chain_id": 421614,
+          "settlement": [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9]
+        },
+        "opening": {
+          "previous_root": [
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1
+          ],
+          "batch": 1,
+          "generation": 1,
+          "opening_commitment": [
+            2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+            2, 2, 2
+          ]
+        },
+        "head": {
+          "count": 0,
+          "chain_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "public_data_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "next_root": "0x0101010101010101010101010101010101010101010101010101010101010101"
+        }
+      },
+      "protocol_time_ms": "1000"
+    },
+    "public_grant": {
+      "schema": "fairvenue-v1-agent-public-grant-v1",
+      "chainId": "421614",
+      "settlement": "0x0909090909090909090909090909090909090909",
+      "owner": "0x0404040404040404040404040404040404040404",
+      "account": "0x0000000000000000000000000000000000000000000000000000000000000007",
+      "agentPublicKey": "0x2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+      "permissions": 15,
+      "delegationNonce": "1",
+      "issuedAtMs": "0",
+      "expiresAtMs": "40000",
+      "maxExpiryMs": "40000",
+      "canWithdraw": false
+    },
+    "next_nonce": "1",
+    "proof_backed": false,
+    "l1_finality_verified": false,
+    "public_release_go": false
+  }
+}
