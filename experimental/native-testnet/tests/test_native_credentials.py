@@ -15,8 +15,8 @@ from fairvenue_schema6 import (
 )
 from fairvenue_schema6 import key_file
 
-SETTLEMENT = "0x0bc610637d5d36bbda873e1175bcb6e9377d3606"
-MOCK_TOKEN = "0xa249d1a0a99071dfc47c9b3426a6186e3c24baba"
+SETTLEMENT = "0xaaebec860fc2ec7f77379ac3c4b892266a76bcbf"
+MOCK_TOKEN = "0x2b62f3c0663d9590113e24ec588018bcb81a7d29"
 API_URL = "https://native-testnet.example/"
 
 
@@ -133,6 +133,22 @@ class NativeCredentialTests(unittest.TestCase):
                 self.assertNotIn(path, str(caught.exception))
                 self.assertNotIn(exported["private_key_seed"], str(caught.exception))
                 self.assertEqual(Path(path).read_bytes(), before)
+
+    def test_previous_season_credentials_refuse_even_with_matching_old_policy(self):
+        policy, exported = fixture()
+        old_settlement = "0x8e50a346a3121ae03ccae6c64330981b2c18e9e9"
+        policy["domain"]["settlement"] = list(bytes.fromhex(old_settlement[2:]))
+        exported["settlement"] = old_settlement
+        exported["mock_token"] = "0xed3fd1b885102d77ed13f8d576e33965ac8d4215"
+        exported["agent_policy"] = copy.deepcopy(policy)
+        exported["public_grant"]["settlement"] = old_settlement
+        with tempfile.TemporaryDirectory(prefix="native-old-season-offline-") as directory:
+            path = write(directory, exported)
+            before = Path(path).read_bytes()
+            with patch("fairvenue_schema6.transport._http", side_effect=AssertionError("no I/O")):
+                with self.assertRaises(AgentError):
+                    self.load(path, policy)
+            self.assertEqual(Path(path).read_bytes(), before)
 
     def test_approved_origin_not_discovered_from_file_or_redirectable(self):
         invalid = ("https://other.example/", "http://127.0.0.1/", "https://native-testnet.example",

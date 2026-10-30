@@ -15,7 +15,7 @@ from test_native_credentials import fixture, write
 
 ROOT = Path(__file__).resolve().parents[1]
 PUBLIC = ROOT / "fairvenue_schema6/deployments/arbitrum-sepolia-1k.json"
-PUBLIC_SHA = "aa622b92aedadb453e09f471dd9ecbfd757c26262cef1ae43c93ad2230181793"
+PUBLIC_SHA = "9a39af143e67f4675f05998bedbafb02a052819d23a2129674db8f8588938d4d"
 
 
 class InstallationTests(unittest.TestCase):

@@ -37,8 +37,8 @@ Installation does not create an account, trade, fund a wallet or activate a serv
 Download a dedicated **TESTNET** bot credential through the separately approved
 native Arena flow. The accepted format is `fairvenue-native-testnet-agent-v1`,
 chain **421614 (Arbitrum Sepolia)**, settlement
-`0x0bc610637d5d36bbda873e1175bcb6e9377d3606`, and mock token
-`0xa249d1a0a99071dfc47c9b3426a6186e3c24baba`.
+`0xaaebec860fc2ec7f77379ac3c4b892266a76bcbf`, and mock token
+`0x2b62f3c0663d9590113e24ec588018bcb81a7d29`.
 These addresses bind the supported experimental deployment, not a mainnet service.
 Trading agents cannot withdraw. No wallet/deposit/broadcast helper is exposed here.
 
@@ -49,7 +49,7 @@ Do not print or recreate a missing private key. One strategy/process owns the ke
 
 Install the operator-approved public installation JSON **independently** of the downloaded
 credential. The artifact `fairvenue_schema6/deployments/arbitrum-sepolia-1k.json` has SHA256
-`aa622b92aedadb453e09f471dd9ecbfd757c26262cef1ae43c93ad2230181793` and binds the exact native
+`9a39af143e67f4675f05998bedbafb02a052819d23a2129674db8f8588938d4d` and binds the exact native
 policy and HTTPS API origin. The operator must approve its current installation separately;
 this packaged public pin is not a hosted-access or release claim. Copy it to a fresh owner-only
 file without overwriting any existing installation. Review the hash/provenance before use.
@@ -74,7 +74,7 @@ from fairvenue_schema6 import NativeTestnetClient, load_native_testnet_installat
 async def no_order_dry_run():
     installed = load_native_testnet_installation(
         "/private/native-installation.json",
-        expected_sha256="aa622b92aedadb453e09f471dd9ecbfd757c26262cef1ae43c93ad2230181793",
+        expected_sha256="9a39af143e67f4675f05998bedbafb02a052819d23a2129674db8f8588938d4d",
     )
     client = NativeTestnetClient.from_credentials(
         "/private/downloaded-testnet-agent.json",
@@ -108,17 +108,38 @@ or lost acknowledgement leaves that original unresolved.
 
 On restart, open the **same** continuity database with `initialize=False` and call
 `await client.recover_original()` inside the same event loop. This is a lookup,
-not a resend. Only exact authenticated native accepted/rejected history can
-retire the original. An advanced nonce, increased balance, new root, elapsed time
-or failed UI indication is insufficient. Unresolved/bound-incomplete outcomes
-stay retained: stop and ask the operator to reconcile, never send another order,
-invent a replacement hash, fee-bump, expire or delete the original.
+not a resend. Only exact native history of the original's own batch can retire
+it: `accepted`/`rejected`, or the terminal `not_admitted` (its batch closed
+without it) and `not_settled` (its batch was voided). An advanced nonce,
+increased balance, new root, elapsed time or failed UI indication is
+insufficient. Unresolved/bound-incomplete outcomes stay retained: stop and ask
+the operator to reconcile, never send another order, invent a replacement hash,
+fee-bump, expire or delete the original.
+
+`run()` itself also clears the original when the server answers a definitive
+`not_placed` refusal bound to that exact request (HTTP 409/429, refused before
+any durable effect; the nonce is not used). It then raises `AgentError` with the
+reason as `code`: `batch_closed`, `stale_context`, `nonce_stale`,
+`intent_expired`, `bad_signature`, `unknown_agent`, `invalid_request`,
+`rate_limited` or `admission_closed`. Build a fresh request from a new
+`snapshot()`. Any other failure is `outcome_unknown` and needs
+`recover_original()`.
 
 Soft acceptance is operator-trusted execution, not independently established
 Nitro/L1 finality or proof verification. This SDK does not itself verify an SP1
 proof or make a hosted service ready. Offline tests are synthetic; genuine hosted
 funding/trading, GPU proof, onchain publication, independent replay, restart and
 exit acceptance remain separate release gates.
+
+## Optional MCP server
+
+The `mcp` extra adds `fairvenue_mcp`, a local stdio MCP server over this client for coding
+agents: `pip install './experimental/native-testnet[mcp]'` provides the `fairvenue-mcp`
+command. It is a kit extension, not imported protocol source. It never changes the protocol
+modules, signs nothing until the user allows trading in a one-click dialog (or
+`FAIRVENUE_TRADING=on`), moves downloaded keys into an owner-private profile without returning
+their seed, and uses `recover_original()` for unknown outcomes. Installation and tools:
+[docs/MCP.md](../../docs/MCP.md).
 
 ## Offline checks and source parity
 
@@ -135,6 +156,8 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=experimental/native-testnet python -m unitt
 python -m build experimental/native-testnet
 ```
 
-Root Ruff checks explicitly exclude this immutable imported source subtree. Its
-separate native CI job runs all offline tests and builds the package. No existing
-V0 test, SDK source or skill is changed or disabled.
+Root Ruff checks exclude the immutable imported protocol modules and copied tests.
+The MCP server and its tests are linted there and type-checked by `mypy` in this
+directory. The separate native CI job runs all offline tests, including the MCP
+tests, and builds the package. No existing V0 test or SDK source is changed or
+disabled.

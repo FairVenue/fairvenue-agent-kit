@@ -7,6 +7,22 @@
   reset balances. Generated integrations must start in no-order dry-run mode.
 - Do not publish this package to PyPI or choose a license without a separate explicit request.
 
+- The optional MCP server (`experimental/native-testnet/fairvenue_mcp`) wraps only
+  `fairvenue_schema6`; never edit the byte-identical protocol modules to suit it. Keep it local
+  stdio. Never sign until the user accepts the trading dialog (an MCP elicitation the model
+  cannot answer) or set `FAIRVENUE_TRADING=on`, and keep that consent per server session. Open
+  only the reviewed https key page, with the desktop opener, never a console browser over the
+  stdio channel. Never return, log or journal a
+  seed, signature or signed envelope. Deployment pins come only from the reviewed packaged file
+  and its SHA256, never from a key file or API reply. Keep `outcome_unknown` blocking until
+  `recover_original()` resolves it; never resend, reprice or resign. Never reinitialize a
+  continuity namespace that `state.json` records. Keep tool annotations accurate: reads are
+  `readOnlyHint`, signing tools are `destructiveHint`.
+- Keep the plugin manifests consistent: `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`,
+  the portable `plugin.json` and `mcp.json`, the native `pyproject.toml` version and
+  `fairvenue_mcp.__version__`. Run `claude plugin validate .` after changing them.
+- Hackathon facts in the skill and the MCP guide must match the public rules page.
+
 - This SDK targets the FairVenue Arena virtual-settlement testnet. Never route user orders or
   credentials to Binance or another external venue.
 - Keep monetary values as decimal strings or `Decimal`; reject binary floats in API payloads.
@@ -18,4 +34,6 @@
 - Book consumers must discard state and resubscribe after a sequence gap.
 - Keep the checked-in signing vector compatible with the Rust server fixture.
 - Before handoff run `ruff format --check .`, `ruff check .`, `mypy src`, `pytest`, and
-  `python -m build`.
+  `python -m build`. With `./experimental/native-testnet[mcp]` installed also run `mypy` inside
+  `experimental/native-testnet`, the native `unittest discover` suite and
+  `python -m build experimental/native-testnet`.

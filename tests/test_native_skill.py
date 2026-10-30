@@ -9,7 +9,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 NATIVE = ROOT / "skills/fairvenue/references/native-testnet.md"
-POLICY_SHA = "aa622b92aedadb453e09f471dd9ecbfd757c26262cef1ae43c93ad2230181793"
+POLICY_SHA = "9a39af143e67f4675f05998bedbafb02a052819d23a2129674db8f8588938d4d"
 
 
 def test_native_skill_recipe_checks_independent_pins_then_signed_context_only(

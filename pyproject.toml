@@ -50,14 +50,28 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-# Byte-identical imported protocol source has its own offline tests/build CI.
-extend-exclude = ["experimental/native-testnet"]
+# Byte-identical imported protocol source and its copied tests have their own
+# offline CI. The kit's own MCP server and its tests are linted here.
+extend-exclude = [
+  "experimental/native-testnet/fairvenue_schema6",
+  "experimental/native-testnet/tests/test_agent.py",
+  "experimental/native-testnet/tests/test_context.py",
+  "experimental/native-testnet/tests/test_installation.py",
+  "experimental/native-testnet/tests/test_native_credentials.py",
+  "experimental/native-testnet/tests/test_native_testnet.py",
+  "experimental/native-testnet/tests/test_package_integrity.py",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "S", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101"]
+"experimental/native-testnet/tests/**" = ["S101", "S108"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["fairvenue", "fairvenue_mcp", "fairvenue_schema6"]
+known-local-folder = ["test_native_testnet"]
 
 [tool.mypy]
 python_version = "3.11"

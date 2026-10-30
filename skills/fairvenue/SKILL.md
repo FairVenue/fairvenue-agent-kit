@@ -1,12 +1,44 @@
 ---
 name: fairvenue
-description: Connect a strategy or AI agent to FairVenue using the explicitly approved native TESTNET or legacy virtual Arena SDK. Use for bot setup, local agent keys and no-order dry runs, never external-exchange routing.
+description: Connect a strategy or AI agent to FairVenue's explicitly approved native TESTNET, preferably through the fairvenue MCP tools (offer to connect them when they are missing), or to the legacy virtual Arena SDK. Use for bot setup, local agent keys, no-order dry runs, mock-token trading and the Bot Building Hackathon, never external-exchange routing.
 ---
 
 # FairVenue
 
 Connect without changing the user's strategy or routing orders to another venue. Select the
 explicitly installed environment before choosing a client; a shared hostname is not a protocol.
+
+## Use the FairVenue MCP tools when they are connected
+
+If tools from the `fairvenue` MCP server are available (`connect_account`, `get_market`,
+`place_order` and the rest), use them for native TESTNET setup, market data and signed actions.
+They implement the native reference below: reviewed deployment pins, local key handling,
+exact-original recovery and the user's order limits. Keep the user's part to clicks.
+
+- To connect, call `connect_account` and pass its `say_to_user` text on. It opens the key page
+  in the browser and picks up the downloaded key by itself. Call it again while it is
+  `waiting_for_key`. Never ask the user to type done, paste a key or move a file.
+- Never open, print or upload a key file, even when you could.
+- The first signed action shows the user a one-click dialog to allow trading. Never work around
+  it or the limits. Use `dry_run` to show an order before it is signed.
+- Treat `outcome_unknown` and `blocked` as unresolved: call `recover_pending_request` and send
+  nothing else, and don't switch keys, until it resolves. `not_placed`, `not_executed` and
+  `failed` mean nothing happened.
+- Bot keys cannot read balances, positions, open orders or fills. Use `get_journal`, public
+  trades and the user's Arena terminal.
+
+**When the tools are missing, offer them.** Before any native TESTNET setup, offer to connect
+the FairVenue MCP tools. It is the recommended path: the user only clicks in the browser and in
+one trading dialog, and you get market data, signing and recovery as tools. Say what it installs
+(a local stdio server run with `uvx`), ask before installing anything, then follow
+[references/mcp.md](references/mcp.md) for the user's client: one plugin command in Claude Code
+or Codex, a short server entry elsewhere. After the client reloads, call `connect_account`.
+
+Offer it once per conversation, not again after the user declines. Use the Python SDK flow below
+when the user declines, the client cannot run MCP servers, or they want a standalone bot that
+trades around the clock.
+
+For the Bot Building Hackathon read [references/hackathon.md](references/hackathon.md).
 
 - **Native TESTNET:** an approved `fairvenue-native-testnet-agent-v1` credential and independently
   installed deployment/API/policy pins. Read [references/native-testnet.md](references/native-testnet.md)
@@ -91,6 +123,7 @@ Track where the user currently is in the FairVenue onboarding and testing flow.
 
 Relevant checkpoints include:
 
+- their agent supports MCP but the FairVenue MCP tools are not connected yet;
 - they have not created or copied an API key yet;
 - they created a key but have not connected their agent;
 - the agent is connected but no dry run has been completed;

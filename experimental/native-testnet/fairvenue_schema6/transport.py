@@ -14,11 +14,20 @@ import time
 from urllib.parse import urlsplit
 
 if __name__ != "__main__":
-    from .protocol import AgentError, fail
+    from .protocol import AdmitRefusal, AgentError, fail
+
+
+# Worker exit status of a bounded JSON admit refusal body (validated by the
+# client, never trusted here); 0 is an ordinary 200 reply, anything else fails.
+_REFUSALS = {409: 2, 429: 3}
 
 
 def _http(origin, path, body, timeout):
-    """Disposable worker only: no SDK signer, cookies, callback or private-key import."""
+    """Disposable worker only: no SDK signer, cookies, callback or private-key import.
+
+    Returns ``(exit_status, body)``: 0 for a 200 reply, or ``_REFUSALS`` for a
+    JSON 409/429 admit reply whose body the client validates exactly.
+    """
     url = urlsplit(origin)
     deadline = time.monotonic() + timeout
     connection = None
@@ -35,7 +44,9 @@ def _http(origin, path, body, timeout):
             "Cache-Control": "no-store", "Connection": "close",
         })
         response = connection.getresponse()
-        if response.status != 200 or response.getheader("Content-Type", "").split(";", 1)[0].strip() != "application/json":
+        status = 0 if response.status == 200 else (
+            _REFUSALS.get(response.status) if path == "/v1/agent/admit" else None)
+        if status is None or response.getheader("Content-Type", "").split(";", 1)[0].strip() != "application/json":
             raise ValueError()
         chunks = []
         size = 0
@@ -49,7 +60,7 @@ def _http(origin, path, body, timeout):
             if time.monotonic() >= deadline:
                 raise ValueError()
             if not chunk:
-                return b"".join(chunks)
+                return status, b"".join(chunks)
             size += len(chunk)
             if size > 16384:
                 raise ValueError()
@@ -148,7 +159,12 @@ class HttpTransport:
             result = exchange.result()
             if time.monotonic() >= deadline:
                 fail("deadline")
-            if process.returncode != 0 or type(result) is not bytes or len(result) > 16384:
+            if type(result) is not bytes or len(result) > 16384:
+                fail("unavailable")
+            refusal = {code: status for status, code in _REFUSALS.items()}.get(process.returncode)
+            if refusal is not None and path == "/v1/agent/admit":
+                raise AdmitRefusal(refusal, result)
+            if process.returncode != 0:
                 fail("unavailable")
             return result
         except AgentError:
@@ -202,7 +218,9 @@ if __name__ == "__main__":
         # Header limits are scoped to this disposable interpreter, not the caller.
         http.client._MAXLINE = 8192
         http.client._MAXHEADERS = 32
-        sys.stdout.buffer.write(_http(request["origin"], request["path"], body, request["timeout"]))
+        status, reply = _http(request["origin"], request["path"], body, request["timeout"])
+        sys.stdout.buffer.write(reply)
         sys.stdout.buffer.flush()
     except BaseException:
         sys.exit(1)  # No response/body/provider/error text on stderr.
+    sys.exit(status)

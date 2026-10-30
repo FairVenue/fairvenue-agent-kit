@@ -1,0 +1,10 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "fairvenue": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["--from", "${PLUGIN_ROOT}/experimental/native-testnet[mcp]", "fairvenue-mcp"]
+    }
+  }
+}

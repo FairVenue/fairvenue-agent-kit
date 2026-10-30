@@ -13,10 +13,24 @@ from unittest.mock import patch
 from fairvenue_schema6 import AgentClient, AgentError, BotContextProvider, NativeTestnetClient
 from fairvenue_schema6 import native_testnet as native
 from fairvenue_schema6.context import _scope
-from fairvenue_schema6.protocol import grant_copy, jcs, policy_copy
+from fairvenue_schema6.protocol import NOT_PLACED, AdmitRefusal, grant_copy, jcs, policy_copy
+from fairvenue_schema6.transport import HttpTransport
 from test_context import ContextFixture
 
 API="https://native-testnet.example/"
+
+
+def not_placed(request,reason,**changes):
+    """The server's exact definitive refusal body for `request`."""
+    result={"error":"not_placed","reason":reason,
+            "request_sha256":"0x"+hashlib.sha256(jcs(request).encode()).hexdigest(),
+            "retry":NOT_PLACED[reason],"proof_backed":False,"l1_finality_verified":False,
+            "public_release_go":False,**changes}
+    return json.dumps(result,separators=(",",":")).encode()
+
+
+def refusal_status(reason):
+    return 429 if reason=="rate_limited" else 409
 
 
 class NativeFixture(ContextFixture):
@@ -32,8 +46,17 @@ class NativeFixture(ContextFixture):
         self.recovery_edit=None
         self.recovery_calls=0
         self.admit_pause=None
+        self.refusal=None
+        self.refused=0
 
     async def post(self,path,body,timeout):
+        if path=="/v1/agent/admit" and self.refusal:
+            # The server refused before any durable effect: nothing admitted.
+            self.refused+=1
+            status,reply=self.refusal(json.loads(body))
+            if status is None:
+                raise AgentError("unavailable")  # e.g. a 503 or transport error
+            raise AdmitRefusal(status,reply)
         if path=="/v1/agent/recovery":
             self.recovery_calls+=1
             request=json.loads(body)
@@ -162,6 +185,120 @@ class NativeTestnetTests(unittest.IsolatedAsyncioTestCase):
                 finally:
                     client.close()
 
+    async def test_terminal_not_admitted_or_voided_clears_original_and_frees_its_nonce(self):
+        def voided(opening,**changes):
+            batch={"batch":opening["batch"],"generation":opening["generation"],
+                   "replacement_generation":opening["generation"]+1,
+                   "replacement_transaction":"0x"+"5"*64,"reason":"dead","settled":False,"re_executed":False}
+            return lambda v:v.update(settlement="not_settled",voided_batch={**batch,**changes})
+        # `opening_failed` names the failed original when one was signed, else
+        # an explicit null; `dead` always names the adopted replacement.
+        for status,changes in (("not_admitted",None),("not_settled",{}),
+                               ("not_settled",{"reason":"opening_failed"}),
+                               ("not_settled",{"reason":"opening_failed","replacement_transaction":None})):
+            fixture=NativeFixture();fixture.lost_reply=True
+            head=copy.deepcopy(fixture.context["prefix"]["head"])
+            with tempfile.TemporaryDirectory(prefix="native-testnet-fixture-") as directory:
+                client=fixture.client(directory)
+                try:
+                    with self.assertRaises(AgentError):
+                        await client.run(fixture.input)
+                    # The server never admitted it (or voided it): no native effect.
+                    fixture.context["prefix"]["head"]=head;fixture.next_nonce="1"
+                    opening=client._custody.read()[2]["request"]["intent"]["expected"]["opening"]
+                    fixture.recovery_status=status
+                    fixture.recovery_edit=voided(opening,**changes) if status=="not_settled" else None
+                    self.assertEqual((await client.recover_original())["status"],status)
+                    self.assertFalse(client.has_pending_request())
+                    self.assertEqual(client._custody.read()[1],0)
+                    # Nothing was consumed natively: the same nonce is signed afresh.
+                    fixture.recovery_status="accepted";fixture.recovery_edit=None
+                    self.assertEqual((await client.run(fixture.input))["recovery"]["status"],"accepted")
+                    self.assertEqual(fixture.calls["admit"],2)
+                finally:
+                    client.close()
+
+    async def test_foreign_or_settled_voided_binding_cannot_clear_original(self):
+        for changes in ({"batch":9},{"generation":9},{"replacement_generation":0},{"settled":True},
+                        {"re_executed":True},{"replacement_transaction":"0x"+"0"*64},
+                        {"replacement_transaction":"0x5"},
+                        # An adopted replacement always names its transaction.
+                        {"replacement_transaction":None},
+                        {"reason":"wrong_root","replacement_transaction":None},
+                        # `opening_failed`: a nonzero hash or null, nothing else.
+                        {"reason":"opening_failed","replacement_transaction":"0x"+"0"*64},
+                        {"reason":"opening_failed","replacement_transaction":0},
+                        # Empty voids are `not_admitted`, never a voided binding.
+                        {"reason":"expired_empty","replacement_transaction":None},
+                        {"reason":"dropped_empty"},{"reason":"operator"}):
+            fixture=NativeFixture();fixture.lost_reply=True
+            with tempfile.TemporaryDirectory(prefix="native-testnet-fixture-") as directory:
+                client=fixture.client(directory)
+                try:
+                    with self.assertRaises(AgentError):
+                        await client.run(fixture.input)
+                    original=copy.deepcopy(client._custody.read()[2])
+                    opening=original["request"]["intent"]["expected"]["opening"]
+                    batch={"batch":opening["batch"],"generation":opening["generation"],
+                           "replacement_generation":opening["generation"]+1,
+                           "replacement_transaction":"0x"+"5"*64,"reason":"dead","settled":False,"re_executed":False}
+                    fixture.recovery_status="not_settled"
+                    fixture.recovery_edit=lambda v:v.update(settlement="not_settled",voided_batch={**batch,**changes})
+                    with self.assertRaises(AgentError):
+                        await client.recover_original()
+                    self.assertEqual(client._custody.read()[2],original)
+                    # A voided binding never accompanies another status.
+                    fixture.recovery_status="not_admitted"
+                    fixture.recovery_edit=lambda v:v.update(settlement="not_settled",voided_batch=batch)
+                    with self.assertRaises(AgentError):
+                        await client.recover_original()
+                    self.assertEqual(client._custody.read()[2],original)
+                finally:
+                    client.close()
+
+    async def test_voided_binding_numbers_are_exact_integers_before_any_nonce_reset(self):
+        # Values that merely compare equal in Python (bool, float) are not the
+        # Rust/browser integers; the retained original, its custody `highest`
+        # and the in-memory nonce floor stay untouched until the exact binding
+        # validated, and only then roll back with the voided lineage.
+        def lookalike(opening):
+            yield {"batch":float(opening["batch"])}
+            yield {"generation":float(opening["generation"])}
+            yield {"replacement_generation":float(opening["generation"]+1)}
+            yield {"replacement_generation":True}
+            yield {"batch":str(opening["batch"])}
+            yield {"reason":["dead"]}
+            yield {"replacement_transaction":["0x"+"5"*64]}
+            for key in ("batch","generation"):
+                if opening[key] in (0,1):
+                    yield {key:bool(opening[key])}
+        fixture=NativeFixture();fixture.lost_reply=True
+        with tempfile.TemporaryDirectory(prefix="native-testnet-fixture-") as directory:
+            client=fixture.client(directory)
+            try:
+                with self.assertRaises(AgentError):
+                    await client.run(fixture.input)
+                revision,_,original=client._custody.read()
+                client._custody.change(revision,5,original)
+                client._nonce_floor=7
+                opening=original["request"]["intent"]["expected"]["opening"]
+                batch={"batch":opening["batch"],"generation":opening["generation"],
+                       "replacement_generation":opening["generation"]+1,
+                       "replacement_transaction":"0x"+"5"*64,"reason":"dead","settled":False,"re_executed":False}
+                fixture.recovery_status="not_settled"
+                for changes in lookalike(opening):
+                    fixture.recovery_edit=lambda v,c=changes:v.update(settlement="not_settled",voided_batch={**batch,**c})
+                    with self.assertRaises(AgentError):
+                        await client.recover_original()
+                    self.assertEqual(client._custody.read()[1:],(5,original))
+                    self.assertEqual(client._nonce_floor,7)
+                fixture.recovery_edit=lambda v:v.update(settlement="not_settled",voided_batch=batch)
+                self.assertEqual((await client.recover_original())["status"],"not_settled")
+                self.assertEqual(client._custody.read()[1:],(0,None))
+                self.assertEqual(client._nonce_floor,0)
+            finally:
+                client.close()
+
     async def test_tampered_prepare_context_and_grant_refuse_before_dispatch(self):
         for edit in (lambda f:setattr(f,"prepare_edit",lambda v:v.update(ordinary_signing_hash="0x"+"1"*64)),
                      lambda f:setattr(f,"edit",lambda v:v.update(challenge="0x"+"1"*64)),
@@ -176,6 +313,108 @@ class NativeTestnetTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(fixture.calls["admit"],0)
                 finally:
                     client.close()
+
+    async def test_definitive_not_placed_clears_original_without_consuming_its_nonce(self):
+        for reason in NOT_PLACED:
+            with self.subTest(reason=reason):
+                fixture=NativeFixture()
+                fixture.refusal=lambda request,r=reason:(refusal_status(r),not_placed(request,r))
+                with tempfile.TemporaryDirectory(prefix="native-testnet-fixture-") as directory:
+                    client=fixture.client(directory)
+                    try:
+                        with self.assertRaises(AgentError) as caught:
+                            await client.run(fixture.input)
+                        self.assertEqual(caught.exception.code,reason)
+                        self.assertFalse(client.has_pending_request())
+                        # Not consumed: `highest` stays, the same nonce signs afresh.
+                        self.assertEqual(client._custody.read()[1:],(0,None))
+                        self.assertEqual((fixture.refused,fixture.calls["admit"],fixture.recovery_calls),(1,0,0))
+                        fixture.refusal=None
+                        self.assertEqual((await client.run(fixture.input))["recovery"]["status"],"accepted")
+                        self.assertEqual(fixture.calls["admit"],1)
+                    finally:
+                        client.close()
+
+    async def test_mismatched_malformed_or_generic_refusal_retains_original(self):
+        generic=json.dumps({"error":"operator beta participant request unavailable or invalid",
+                            "proof_backed":False,"public_release_go":False}).encode()
+        cases=(lambda q:(409,not_placed(q,"batch_closed",request_sha256="0x"+"1"*64)),
+               lambda q:(409,not_placed({**q,"intent_signature":"0x"+"2"*128},"batch_closed")),
+               lambda q:(409,not_placed(q,"batch_closed",
+                                        request_sha256="0x"+hashlib.sha256(jcs(q).encode()).hexdigest().upper())),
+               lambda q:(409,not_placed(q,"batch_closed",extra=True)),
+               lambda q:(409,not_placed(q,"batch_closed",retry="later")),
+               lambda q:(409,not_placed(q,"admission_closed",retry="resign")),
+               lambda q:(409,not_placed(q,"rate_limited")),
+               lambda q:(429,not_placed(q,"batch_closed")),
+               lambda q:(409,not_placed(q,"slot_moved",retry="resign")),
+               lambda q:(409,not_placed(q,"batch_closed",error="outcome_unknown")),
+               lambda q:(409,not_placed(q,"batch_closed",proof_backed=True)),
+               lambda q:(409,not_placed(q,"batch_closed",l1_finality_verified=0)),
+               lambda q:(409,b"not json"),
+               lambda q:(409,generic),lambda q:(429,generic),
+               lambda q:(None,None))  # 503, timeout or transport failure
+        for index,case in enumerate(cases):
+            with self.subTest(case=index):
+                fixture=NativeFixture();fixture.refusal=case
+                with tempfile.TemporaryDirectory(prefix="native-testnet-fixture-") as directory:
+                    client=fixture.client(directory)
+                    try:
+                        with self.assertRaises(AgentError) as caught:
+                            await client.run(fixture.input)
+                        self.assertEqual(caught.exception.code,"outcome_unknown")
+                        self.assertTrue(client.has_pending_request())
+                        retained=client._custody.read()[2]
+                        self.assertEqual(retained["request"]["intent"]["nonce"],fixture.input["nonce"])
+                        self.assertEqual(fixture.recovery_calls,0)
+                        # Retained: no new action until recover_original resolves it.
+                        with self.assertRaises(AgentError) as again:
+                            await client.run({**fixture.input,"nonce":"2"})
+                        self.assertEqual(again.exception.code,"outcome_unknown")
+                        self.assertEqual(client._custody.read()[2],retained)
+                    finally:
+                        client.close()
+
+    async def test_transport_surfaces_only_admit_409_429_json_bodies(self):
+        import http.server
+        import threading
+        replies={}
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers["Content-Length"]))
+                status,kind,body=replies[self.path]
+                self.send_response(status)
+                self.send_header("Content-Type",kind)
+                self.send_header("Content-Length",str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            def log_message(self,*_):
+                pass
+        server=http.server.ThreadingHTTPServer(("127.0.0.1",0),Handler)
+        thread=threading.Thread(target=server.serve_forever,daemon=True)
+        thread.start()
+        try:
+            transport=HttpTransport(f"http://127.0.0.1:{server.server_address[1]}")
+            body=b'{"error":"not_placed"}'
+            for status in (409,429):
+                replies["/v1/agent/admit"]=(status,"application/json",body)
+                with self.assertRaises(AdmitRefusal) as caught:
+                    await transport.post("/v1/agent/admit",b"{}",5)
+                self.assertEqual((caught.exception.status,caught.exception.body,caught.exception.code),
+                                 (status,body,"outcome_unknown"))
+            for path,reply in (("/v1/agent/admit",(503,"application/json",body)),
+                               ("/v1/agent/admit",(409,"text/plain",body)),
+                               ("/v1/agent/admit",(400,"application/json",body)),
+                               ("/v1/agent/prepare",(409,"application/json",body))):
+                replies[path]=reply
+                with self.assertRaises(AgentError) as caught:
+                    await transport.post(path,b"{}",5)
+                self.assertNotIsInstance(caught.exception,AdmitRefusal)
+                self.assertEqual(caught.exception.code,"unavailable")
+            replies["/v1/agent/admit"]=(200,"application/json",b'{"ok":true}')
+            self.assertEqual(await transport.post("/v1/agent/admit",b"{}",5),b'{"ok":true}')
+        finally:
+            await asyncio.to_thread(server.shutdown);server.server_close()
 
     async def test_timeout_keeps_live_callback_fence_and_public_original(self):
         fixture=NativeFixture()

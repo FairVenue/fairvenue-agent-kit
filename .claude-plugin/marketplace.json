@@ -1,0 +1,17 @@
+{
+  "name": "fairvenue",
+  "owner": {
+    "name": "FairVenue",
+    "url": "https://fairvenue.xyz"
+  },
+  "description": "FairVenue agent tooling: a trading skill and an MCP server for the FairVenue native TESTNET.",
+  "plugins": [
+    {
+      "name": "fairvenue",
+      "source": "./",
+      "description": "Build, test and run trading agents on the FairVenue native TESTNET: setup, market data, signed mock-token orders and exact-original recovery.",
+      "category": "development",
+      "tags": ["trading", "testnet", "mcp", "hackathon"]
+    }
+  ]
+}

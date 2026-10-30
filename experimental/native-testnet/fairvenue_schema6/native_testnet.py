@@ -24,9 +24,9 @@ from .context import REQUEST_SCHEMA, RESPONSE_SCHEMA, _scope, _signing_bytes
 from .crypto import CryptoPrimitives
 from .key_file import (_NATIVE_MOCK_TOKEN, _NATIVE_SETTLEMENT, _native_api_url,
                        load_native_testnet_agent_key)
-from .protocol import (AgentError, action_copy, build, context_copy, decimal,
-                       encoded_hex, exact, fail, grant_copy, integer, jcs,
-                       policy_copy)
+from .protocol import (NOT_PLACED, SAFE, AdmitRefusal, AgentError, action_copy, build,
+                       context_copy, decimal, encoded_hex, exact, fail, grant_copy,
+                       hex_value, integer, jcs, policy_copy)
 from .transport import HttpTransport
 
 _TABLE = ("CREATE TABLE original(singleton INTEGER PRIMARY KEY CHECK(singleton=1),"
@@ -47,6 +47,36 @@ def _file(info):
     if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
             or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != 0o600):
         fail()
+
+
+def _voided_batch(batch, opening):
+    """The exact ``voided_batch`` of a terminal ``not_settled`` recovery.
+
+    Validated identically by the Rust DTO and the browser: exactly the
+    request's own opening, voided by a strictly later generation. ``dead`` or
+    ``wrong_root`` (an adopted head replacement) name its nonzero transaction
+    hash; ``opening_failed`` names the failed original's nonzero hash when one
+    was signed, else ``None`` (JSON null). Numbers must be exact JSON integers
+    (never a bool or float that merely compares equal), strings exact strings.
+    """
+    exact(batch, ("batch","generation","replacement_generation","replacement_transaction",
+                  "reason","settled","re_executed"))
+    def whole(value):
+        return type(value) is int and 0 <= value <= SAFE
+    transaction, reason = batch["replacement_transaction"], batch["reason"]
+    if (not all(whole(value) for value in (batch["batch"], batch["generation"],
+                                            batch["replacement_generation"],
+                                            opening["batch"], opening["generation"]))
+            or batch["batch"] != opening["batch"]
+            or batch["generation"] != opening["generation"]
+            or batch["replacement_generation"] <= opening["generation"]
+            or type(reason) is not str or reason not in ("dead","wrong_root","opening_failed")
+            or transaction is None and reason != "opening_failed"
+            or transaction is not None and type(transaction) is not str
+            or batch["settled"] is not False or batch["re_executed"] is not False):
+        fail("response_invalid")
+    if transaction is not None:
+        hex_value(transaction)
 
 
 class _OriginalCustody:
@@ -346,32 +376,96 @@ class NativeTestnetClient:
             fail("no_pending_request")
         request = original["request"]
         result = await post("/v1/agent/recovery",{"signed_request":request})
+        voided = isinstance(result,dict) and result.get("status") == "not_settled"
         exact(result,("schema","status","request_sha256","step","retry_authorized",
-                      "proof_backed","l1_finality_verified","public_release_go"))
+                      "proof_backed","l1_finality_verified","public_release_go")
+              + (("settlement","voided_batch") if voided else ()))
+        expected = request["intent"]["expected"]
         if (result["schema"] != "fairvenue-v1-agent-recovery-v1"
                 or result["request_sha256"] != encoded_hex(hashlib.sha256(_wire(request)).digest())
-                or integer(result["step"],511) != request["intent"]["expected"]["head"]["count"]
-                or result["status"] not in ("accepted","rejected","unresolved","bound_incomplete")
+                or integer(result["step"],511) != expected["head"]["count"]
+                or result["status"] not in ("accepted","rejected","unresolved","bound_incomplete","not_settled","not_admitted")
                 or any(result[key] is not False for key in ("retry_authorized","proof_backed","l1_finality_verified","public_release_go"))):
             fail("response_invalid")
-        if result["status"] in ("accepted","rejected"):
+        if voided:
+            # Terminal: exactly this original's own opening, voided by a later
+            # generation. It never settles and is never resent here. Any
+            # malformed binding raises here, before custody changes.
+            if result["settlement"] != "not_settled":
+                fail("response_invalid")
+            _voided_batch(result["voided_batch"], expected["opening"])
+        if result["status"] in ("accepted","rejected","not_settled","not_admitted"):
             revision,highest,stored = self._custody.read()
             if stored != original:
                 fail("context_changed")
-            self._custody.change(revision,max(highest,decimal(request["intent"]["nonce"],safe=True)),None)
+            nonce = decimal(request["intent"]["nonce"],safe=True)
+            if result["status"] in ("accepted","rejected"):
+                highest = max(highest,nonce)
+            elif voided:
+                # Only after the binding above fully validated: every request
+                # bound to the voided lineage is dead and the native nonce
+                # window rolls back with it; the server's window still refuses
+                # any nonce it has consumed.
+                highest = 0
+            # not_admitted: its own batch sealed without it, so the nonce was
+            # never consumed and stays available for a new request.
+            self._custody.change(revision,highest,None)
+            if voided:
+                self._nonce_floor = 0
         return copy.deepcopy(result)
 
     async def recover_original(self, *, timeout_ms=15000):
         """Exact original lookup only, even after expiry/revocation/new opening.
 
-        unresolved/bound_incomplete retain it. This method never sends admit.
+        unresolved/bound_incomplete retain it; accepted/rejected and the terminal
+        not_admitted (its batch sealed without it) or not_settled (its batch was
+        voided) clear it. This method never sends admit.
         """
         async def work(post,sign,check):
             return await self._recover(post)
         return await self._operation(timeout_ms,work)
 
+    def _not_placed(self, refusal, pending):
+        """Definitive admit refusal of exactly the retained original.
+
+        Only an exact ``not_placed`` body (HTTP 409, or 429 for
+        ``rate_limited``) whose ``request_sha256`` is this original's digest
+        clears it, WITHOUT advancing ``highest``: the server proved nothing
+        was placed and the nonce was not consumed (also for ``nonce_stale``;
+        the next context decides). Raises ``AgentError(reason)``. Anything
+        else returns, keeping the original (``outcome_unknown``).
+        """
+        try:
+            result = _json(refusal.body)
+            exact(result,("error","reason","request_sha256","retry","proof_backed",
+                          "l1_finality_verified","public_release_go"))
+        except AgentError:
+            return
+        reason = result["reason"]
+        if (result["error"] != "not_placed" or type(reason) is not str or reason not in NOT_PLACED
+                or result["retry"] != NOT_PLACED[reason]
+                or refusal.status != (429 if reason == "rate_limited" else 409)
+                or result["request_sha256"] != encoded_hex(hashlib.sha256(_wire(pending["request"])).digest())
+                or any(result[key] is not False for key in ("proof_backed","l1_finality_verified","public_release_go"))):
+            return
+        revision,highest,stored = self._custody.read()
+        if stored != pending:
+            return
+        self._custody.change(revision,highest,None)
+        fail(reason)
+
     async def run(self, input, *, timeout_ms=60000):
-        """One explicitly authorized native action; no automatic resend/reprice."""
+        """One explicitly authorized native action; no automatic resend/reprice.
+
+        A definitive ``not_placed`` admit refusal of the exact retained
+        original clears it (nonce not consumed) and raises ``AgentError`` with
+        its reason: ``batch_closed``, ``stale_context``, ``nonce_stale``,
+        ``intent_expired``, ``bad_signature``, ``unknown_agent``,
+        ``invalid_request`` (re-sign on a fresh context), ``rate_limited``
+        (the same or a re-signed request, shortly) or ``admission_closed``
+        (paused; later). Any other failure is ``outcome_unknown``: the
+        original stays retained until ``recover_original()`` resolves it.
+        """
         exact(input,("nonce","expiresAtMs","action"))
         chosen = {"nonce":input["nonce"],"expiresAtMs":input["expiresAtMs"],"action":action_copy(input["action"])[0]}
         decimal(chosen["nonce"],safe=True); decimal(chosen["expiresAtMs"],safe=True)
@@ -399,7 +493,12 @@ class NativeTestnetClient:
                        "protocol_time_ms":original["context"]["protocol_time_ms"]}
             self._custody.change(revision,highest,pending)
             self._original()  # Read back and locally authenticate before send.
-            ack = AgentClient._AgentClient__ack(await post("/v1/agent/admit",request),signables["intent"]["expected"],self._policy)
+            try:
+                reply = await post("/v1/agent/admit",request)
+            except AdmitRefusal as refusal:
+                self._not_placed(refusal,pending)
+                raise
+            ack = AgentClient._AgentClient__ack(reply,signables["intent"]["expected"],self._policy)
             recovery = await self._recover(post)
             if recovery["status"] not in ("accepted","rejected"):
                 fail("outcome_unknown")

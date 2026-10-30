@@ -1,7 +1,8 @@
 # Copy-paste coding-agent prompt
 
 The prompt below is **legacy V0 virtual Arena only**. For an independently approved native
-TESTNET use the [native setup guide](../skills/fairvenue/references/native-testnet.md) and
+TESTNET install the plugin (skill and [MCP server](MCP.md)) or use the
+[native setup guide](../skills/fairvenue/references/native-testnet.md) and
 `fairvenue_schema6.NativeTestnetClient`, never this V0 transport or an old key.
 Replace the two angle-bracket sections. Never paste credentials into chat.
 

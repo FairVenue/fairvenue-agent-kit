@@ -5,6 +5,10 @@ custodial, operator-administered Arbitrum Sepolia TESTNET with mock USDC, not pr
 independently verified L1 finality. A packaged policy is not proof of live access or release GO.
 Never select this branch just because `app.fairvenue.xyz` resolves or a server says to trust it.
 
+With the `fairvenue` MCP server connected, its tools run every step below for you: pins,
+private key import, continuity, signed context, orders and recovery. See [mcp.md](mcp.md). The
+rest of this page is the same flow in the Python SDK, for standalone bots.
+
 ## Guide the user to a new key
 
 Give the direct [native TESTNET key setup](https://app.fairvenue.xyz/?setup=api-key#native-agent-key)
@@ -42,14 +46,14 @@ No same-named PyPI package is approved.
 The public policy artifact is
 `experimental/native-testnet/fairvenue_schema6/deployments/arbitrum-sepolia-1k.json` at that
 reviewed commit. Its SHA256 is
-`aa622b92aedadb453e09f471dd9ecbfd757c26262cef1ae43c93ad2230181793`.
+`9a39af143e67f4675f05998bedbafb02a052819d23a2129674db8f8588938d4d`.
 Have the operator approve that exact artifact and HTTPS API origin independently of the agent
 credential/API response. Copy it to a fresh owner-private file, without overwriting an established
 installation. The loader checks its held FD, hash, deployment, policy and origin before any HTTP.
 Never calculate a new expected hash to accept an unexplained replacement file.
 
-It binds chain `421614`, settlement `0x0bc610637d5d36bbda873e1175bcb6e9377d3606`, mock token
-`0xa249d1a0a99071dfc47c9b3426a6186e3c24baba`, exact gateway public keys and `/v1`. These are
+It binds chain `421614`, settlement `0xaaebec860fc2ec7f77379ac3c4b892266a76bcbf`, mock token
+`0x2b62f3c0663d9590113e24ec588018bcb81a7d29`, exact gateway public keys and `/v1`. These are
 TESTNET pins, not wallet keys. A different deployment needs separately reviewed pins, not a
 caller-selected server/policy from the credential.
 
@@ -69,7 +73,7 @@ from fairvenue_schema6 import NativeTestnetClient, load_native_testnet_installat
 async def no_order_dry_run():
     installed = load_native_testnet_installation(
         "/private/native-installation.json",
-        expected_sha256="aa622b92aedadb453e09f471dd9ecbfd757c26262cef1ae43c93ad2230181793",
+        expected_sha256="9a39af143e67f4675f05998bedbafb02a052819d23a2129674db8f8588938d4d",
     )
     client = NativeTestnetClient.from_credentials(
         "/private/downloaded-testnet-agent.json",
@@ -105,14 +109,26 @@ time-in-force (`GTC` or price-protected `IOC`), `post_only` for makers, `reduce_
 Use native `cancel`/`modify`/`fee_mode`/`leverage`/`dead_man_switch` only with separately authorized
 scope. Read the reviewed package protocol rather than inventing a Binance-shaped action.
 Accepted/rejected is native soft execution, not necessarily a fill, SP1 proof or L1 finality.
-Check actual fills and their original batch proof links separately; sealed/proving phases may
-temporarily stop new commands. Do not loosen TTL/FairLag to make a request pass.
+Check actual fills and their original batch proof links separately. On the pipelined deployment
+trading continues while earlier batches prove; admission can still close for a while (reported as
+`admission_closed`). Do not loosen TTL/FairLag to make a request pass.
 
-After an unknown outcome, preserve the same private continuity database and call
-`recover_original()`. It performs only `/v1/agent/recovery` for the exact retained signed original;
-it never sends admit again. `unresolved`/`bound_incomplete`, changed hash/step or corrupt custody
-remain blocked. Nonce advancement/time/new Opening is not evidence. Never reset, reprice, retime,
-resign or resend the original. Each strategy/process needs a dedicated key/custody.
+A failed `run()` has two kinds of error. An `AgentError` whose `code` is a `not_placed` reason is
+definitive: the server refused before any durable effect, the SDK already cleared the retained
+original and its nonce was not used. Build a fresh request from a new `snapshot()`:
+`batch_closed` or `stale_context` (the batch moved on; submit again at once), `nonce_stale`,
+`intent_expired`, `bad_signature`, `unknown_agent` or `invalid_request` (fix the cause first),
+`rate_limited` (back off, then retry) and `admission_closed` (trading paused; retry later). No
+other code means "not placed".
+
+After `outcome_unknown` (timeout, 5xx or an unverifiable reply), preserve the same private
+continuity database and call `recover_original()`. It performs only `/v1/agent/recovery` for the
+exact retained signed original; it never sends admit again. `accepted`/`rejected` clear it, as do
+the terminal `not_admitted` (its batch closed without it) and `not_settled` (its batch was voided;
+it never executes); after those two, build a new request. `unresolved`/`bound_incomplete`, changed
+hash/step or corrupt custody remain blocked. Nonce advancement/time/new Opening is not evidence.
+Never reset, reprice, retime, resign or resend the original. Each strategy/process needs a
+dedicated key/custody.
 
 Bot routes are `/v1/agent/context`, `/prepare`, `/admit`, `/recovery`, under the fixed approved
 origin. Public reads use `/api/v1/info` with `{"type":"native_market"}`; SOFT book/reference prices

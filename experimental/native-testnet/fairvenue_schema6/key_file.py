@@ -12,8 +12,8 @@ from .protocol import AgentError, encoded_hex, exact, fail, grant_copy, hex_valu
 from .transport import HttpTransport
 
 _NATIVE_SCHEMA = "fairvenue-native-testnet-agent-v1"
-_NATIVE_SETTLEMENT = "0x0bc610637d5d36bbda873e1175bcb6e9377d3606"
-_NATIVE_MOCK_TOKEN = "0xa249d1a0a99071dfc47c9b3426a6186e3c24baba"
+_NATIVE_SETTLEMENT = "0xaaebec860fc2ec7f77379ac3c4b892266a76bcbf"
+_NATIVE_MOCK_TOKEN = "0x2b62f3c0663d9590113e24ec588018bcb81a7d29"
 
 
 def _identity(info):

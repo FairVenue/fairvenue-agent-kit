@@ -12,6 +12,17 @@ SCHEMA = "fairvenue-fva8-account-free-agent-v1"
 GRANT_SCHEMA = "fairvenue-v1-agent-public-grant-v1"
 
 
+# Definitive operator-beta admit refusal (`"error":"not_placed"`): reason ->
+# the only `retry` the server pairs with it. HTTP 409, except 429 for
+# `rate_limited`. The exact signed request was provably not placed (nothing
+# durable, nonce not consumed, not bound), so its retained original clears.
+NOT_PLACED = {
+    "batch_closed": "resign", "stale_context": "resign", "nonce_stale": "resign",
+    "intent_expired": "resign", "bad_signature": "resign", "unknown_agent": "resign",
+    "invalid_request": "resign", "rate_limited": "same_or_resign", "admission_closed": "later",
+}
+
+
 class AgentError(Exception):
     """Content-free failures; never include a key, request or upstream error."""
 
@@ -19,9 +30,17 @@ class AgentError(Exception):
         self.code = code if code in (
             "invalid_input", "crypto_unavailable", "context_changed", "signature_invalid",
             "activation_closed", "busy", "deadline", "unavailable", "response_invalid",
-            "outcome_unknown", "no_pending_request", "nonce_reused",
+            "outcome_unknown", "no_pending_request", "nonce_reused", *NOT_PLACED,
         ) else "unavailable"
         super().__init__("Agent request refused; retain any pending signed request before retrying.")
+
+
+class AdmitRefusal(AgentError):
+    """A public non-2xx admit reply (409/429), not yet validated or trusted."""
+
+    def __init__(self, status, body):
+        super().__init__("outcome_unknown")
+        self.status, self.body = status, body
 
 
 def fail(code="invalid_input"):
