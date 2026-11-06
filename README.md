@@ -65,8 +65,9 @@ The repository is a Claude Code plugin and marketplace (`.claude-plugin/`) and a
 
 ## Bot Building Hackathon
 
-Scoring days are **November 4, 5 and 6, 2026 (UTC)**. Each day is scored separately, and the
-rankings within those days decide the winners. Only API trades count: trades signed with a bot
+Scoring days are **November 16, 17 and 18, 2026 (UTC)**. Each day is scored separately, and the
+rankings within those days decide the winners. It runs only with 50+ participants. Only API
+trades count: trades signed with a bot
 key from **Create API key & download JSON**, including trades your agent signs through the MCP
 server. Full rules: [fairvenue.xyz/hackathon/rules](https://fairvenue.xyz/hackathon/rules) and
 [skills/fairvenue/references/hackathon.md](skills/fairvenue/references/hackathon.md). Bug reports

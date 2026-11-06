@@ -38,7 +38,7 @@ trades in get_market, or ask the user to check the Arena terminal.
 - Public reads and signed calls share small global rate limits with every participant. Prefer \
 wait_for_market_update to tight polling.
 - Bot Building Hackathon: only trades signed with an API key count. Scoring days are November \
-4, 5 and 6, 2026 (UTC). See get_guide("hackathon").
+16, 17 and 18, 2026 (UTC). See get_guide("hackathon").
 
 Background: get_guide with topic overview, setup, trading, recovery, hackathon or bot.
 """
@@ -127,7 +127,7 @@ missing.""",
 Bot Building Hackathon on the FairVenue testnet. Official rules: {RULES_URL} and the Hackathon \
 tab in Arena. If anything here differs, those win.
 
-Prizes, $1,005 in total, paid in crypto:
+It runs only with 50+ participants. Prizes, $1,005 in total, paid in crypto:
 - Top taker volume, $250. Requires PnL > 0 and Sharpe > 1.
 - Top maker volume, $250. Requires PnL > 0 and Sharpe > 1.
 - Top PnL, $250. Requires Sharpe > 2.
@@ -138,12 +138,12 @@ Rules:
 - API trades only. Only trades signed with a bot key from "Create API key & download JSON" \
 count toward trading prizes. Trades placed in the browser terminal don't. Create a fresh bot \
 key when you join. Trades sent through this MCP server use that bot key, so they count.
-- Scoring days: November 4, 5 and 6, 2026 (UTC). Each day is scored separately, and the \
+- Scoring days: November 16, 17 and 18, 2026 (UTC). Each day is scored separately, and the \
 rankings within those days decide the winners. Only trading on those days is ranked.
 - Ties: if accounts tie, the account that traded more before the scoring days ranks higher.
 - One trading prize per account. The testnet contribution prize can be won in addition.
 - Testnet contribution: open a GitHub issue in FairVenue/fairvenue-agent-kit with a title \
-starting [Hackathon bug] or [Hackathon analysis]. Submissions close Nov 6, 2026, 23:59 UTC. \
+starting [Hackathon bug] or [Hackathon analysis]. Submissions close Nov 18, 2026, 23:59 UTC. \
 Report security-sensitive bugs privately to security@fairvenue.xyz, never in a public issue.
 - Winners are announced on the Hackathon tab after the competition, by public testnet owner \
 address, never an internal account ID. Winners aren't contacted by email.
@@ -226,7 +226,7 @@ def hackathon_prompt() -> str:
     return (
         "Help me prepare for the FairVenue Bot Building Hackathon. Read get_guide('hackathon') "
         "and setup_status. Check that my trades will count (API key, not the browser terminal). "
-        "Then propose a plan for the scoring days, November 4, 5 and 6, 2026 (UTC): which "
+        "Then propose a plan for the scoring days, November 16, 17 and 18, 2026 (UTC): which "
         "prize to target, a strategy that can keep PnL above zero with a qualifying Sharpe "
         "ratio, a schedule that covers every UTC hour of each scoring day, and risk limits."
     )

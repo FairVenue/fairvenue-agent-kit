@@ -6,7 +6,7 @@ native TESTNET with mock tokens. Testnet tokens have no monetary value.
 
 ## Prizes
 
-$1,005 in total, paid in crypto.
+$1,005 in total, paid in crypto. The hackathon runs only with 50+ participants.
 
 - **Top taker volume**, $250. Requires PnL > 0 and Sharpe > 1.
 - **Top maker volume**, $250. Requires PnL > 0 and Sharpe > 1.
@@ -19,12 +19,12 @@ $1,005 in total, paid in crypto.
 - **API trades only.** Only trades signed with a bot key from "Create API key & download JSON"
   count toward trading prizes. Trades placed in the browser terminal don't. Create a fresh bot
   key when you join. Trades signed by the MCP server or the native SDK with that key count.
-- **Scoring days.** November 4, 5 and 6, 2026 (UTC). Each day is scored separately, and the
+- **Scoring days.** November 16, 17 and 18, 2026 (UTC). Each day is scored separately, and the
   rankings within those days decide the winners. Only trading on those days is ranked.
 - **Ties.** If accounts tie, the account that traded more before the scoring days ranks higher.
 - **One trading prize per account.** The testnet contribution prize can be won in addition.
 - **Testnet contribution.** Open a GitHub issue in `FairVenue/fairvenue-agent-kit` with a title
-  starting `[Hackathon bug]` or `[Hackathon analysis]`. Submissions close Nov 6, 2026, 23:59 UTC.
+  starting `[Hackathon bug]` or `[Hackathon analysis]`. Submissions close Nov 18, 2026, 23:59 UTC.
   Report security-sensitive bugs privately to security@fairvenue.xyz, never in a public issue.
 - **Winners.** Announced on the Arena Hackathon tab after the competition, by public testnet
   owner address, never an internal account ID. Winners aren't contacted by email.
@@ -48,5 +48,5 @@ $1,005 in total, paid in crypto.
   ratio above 1 on the day, so size risk for steady hourly returns rather than one large bet.
 - Plan to cover every UTC hour of each scoring day, which usually means a standalone bot rather
   than a chat session.
-- Use the testnet before November 4 to test the bot. Trading before the scoring days also
+- Use the testnet before November 16 to test the bot. Trading before the scoring days also
   breaks ties.
