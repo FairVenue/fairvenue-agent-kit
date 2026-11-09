@@ -1,12 +1,16 @@
 {
   "schema": "fairvenue-native-testnet-source-parity-v1",
   "status": "experimental-release-preparation-not-hosted-acceptance",
-  "source": "FairVenue verifiable-testnet/onboarding/python (operator-managed testnet source, 2026-10-25; one-hour recovery season pins; live release acceptance pending)",
-  "public_base_commit": "231f440d038d8d093edd5ffe4efa638a0608b476",
+  "source": "FairVenue verifiable-testnet/onboarding/python (operator-managed testnet source, 2026-11-10; TS2 wire, settlement 0x3beb98f3ab27d3ac9595e28a3ca03e016fb2745b, config hash 0x6a72cb1998229bcd0d5ce8ea8bbeb0d6c294ee51a385f08208fe3439b58d8d91; live release acceptance pending)",
+  "public_base_commit": "7de5e93fc823d264e69f58291dbb5ab1257fce73",
   "byte_identical": [
     {
       "path": "requirements.txt",
       "sha256": "2e72dfcf859726d0011598752e6162fcd206b045fb68ea1d7422bf916094465c"
+    },
+    {
+      "path": "fairvenue_schema6/__init__.py",
+      "sha256": "1c2d615817ca3d89c9e2d39692399d1dd809934f6ff130e55336e9787699a7e7"
     },
     {
       "path": "fairvenue_schema6/client.py",
@@ -21,20 +25,32 @@
       "sha256": "a825197de5c42f17d96795c2e52dcadca52d7694337c3a893a3bfb062fe12cc4"
     },
     {
+      "path": "fairvenue_schema6/deployments/arbitrum-sepolia-ts2.json",
+      "sha256": "8a7cb56d98859cfb6e69b2416e4ae7eb3974a6a1012867bb7b1b205a2d1ab169"
+    },
+    {
+      "path": "fairvenue_schema6/installation.py",
+      "sha256": "40c75f04e02d54be82198af5a6f0055b1254b2a5f7b9e4fde73e94b5f589d14a"
+    },
+    {
       "path": "fairvenue_schema6/key_file.py",
-      "sha256": "ac5f0a2570dbc25cc7c47edb8cb133f9a79c435f2acff84bc2931f3388421878"
+      "sha256": "5cd9e9a83f9fdee82784a22b2a264c6853b61552dcd5e6200afddd2a95fd66d4"
     },
     {
       "path": "fairvenue_schema6/native_testnet.py",
-      "sha256": "29bc720f634f45c3d9718cd93bb5b23c31f582643e9af7b3a5bfd04a32782cbc"
+      "sha256": "954a1b358061096ec4a901e7339e7f82585a857308ba06adebd571d13ccd418d"
     },
     {
       "path": "fairvenue_schema6/protocol.py",
-      "sha256": "f8b3d6966dd5132c0de7be39cf698d7f7e8f3a75597b1968cce221b0205d3d8a"
+      "sha256": "4c048aa8cdd0ac3fcf6f64b5f20ffcffccfb972a3b45029c1631543c4eb71cff"
     },
     {
       "path": "fairvenue_schema6/transport.py",
-      "sha256": "186b15fdfaba6cd21b932f599780807a7df4bc4fb50d05421899446af8445397"
+      "sha256": "95d7694b98e40d795a4555007b2888a72a9e1ba4f7142c5d24fc779e693b98f4"
+    },
+    {
+      "path": "fairvenue_schema6/ts2.py",
+      "sha256": "6a527d4e07bd700278a1f019d08856590cc6b300f9a612713c66ce19f41dc416"
     },
     {
       "path": "tests/fixtures/agent-commands.golden.json",
@@ -43,26 +59,38 @@
     {
       "path": "tests/fixtures/agent-context.golden.json",
       "sha256": "2857eb95de1347b81a88b9885c5e5c751249edabf5234ca3b86f541f8afa92a1"
+    },
+    {
+      "path": "tests/fixtures/ts2-client-security-vectors-v1.json",
+      "sha256": "61ba9149deb404953a674cee1ef7d99270ffabf33e321eb21f61d97645c33502"
+    },
+    {
+      "path": "tests/fixtures/ts2-client-vectors-v1.json",
+      "sha256": "44abcb69995ae3ed70d667469c1ccfda84b08b0241fb7f99bf6d2e368d727e4b"
+    },
+    {
+      "path": "tests/test_installation.py",
+      "sha256": "22c3ef799df5c1db9773ef187f3004d7d16e99bbddab7af1e62b7ff257b4a92a"
+    },
+    {
+      "path": "tests/test_native_credentials.py",
+      "sha256": "f71abcf56179222647643a87d1784faf3ec2dd62ffb46ecee8f4ca340bed206d"
+    },
+    {
+      "path": "tests/test_native_testnet.py",
+      "sha256": "11ac29e79b8e9b8ddd6e5aa8edfe6989ca0bac3938e5e8da0ff0ffa549300add"
+    },
+    {
+      "path": "tests/test_ts2_codec.py",
+      "sha256": "0548b60f4f6d0c06ed04d4f1295c9fa93c3c404f026cfc06d4e5f80047dc761d"
     }
   ],
   "public_extensions": [
     {
       "path": "pyproject.toml",
-      "sha256": "a71be94371ec2efbbfef8eb85320a739efa72b35da09a25bc9e1757854d33508"
-    },
-    {
-      "path": "fairvenue_schema6/__init__.py",
-      "sha256": "f50c52c20bb7c4eb3e0f50631a83b038ee37490b180a470c6d2775eee1b412a9"
-    },
-    {
-      "path": "fairvenue_schema6/installation.py",
-      "sha256": "1915990845eedee1baf7400c9125d26373d35cdf175842ad034988bb655954b1"
-    },
-    {
-      "path": "fairvenue_schema6/deployments/arbitrum-sepolia-1k.json",
-      "sha256": "9a39af143e67f4675f05998bedbafb02a052819d23a2129674db8f8588938d4d"
+      "sha256": "19e393006ad29535462b1e9203d2770b5db79e005a9231fa9f2ceefc1888fd6a"
     }
   ],
-  "tests": "Copied offline synthetic tests with package-local vector paths, plus public installation hash/FD/deployment guard tests. Protocol and native signing/prepare codec unchanged; since 2026-10-15 admit/recovery handling also accepts the terminal not_admitted/not_settled recovery statuses and the definitive not_placed admit refusal bound to the exact request digest.",
-  "kit_extensions": "fairvenue_mcp/ and tests/test_mcp_server.py are the agent kit's optional MCP server (the pyproject mcp extra), not imported protocol source. They only call the public fairvenue_schema6 API and never change the byte-identical modules above."
+  "tests": "TS2 tests are byte-identical copies of the source tests: shared JS/Rust vector parity (order ids, signing messages, signatures, request_sha256), TS2 key files (V4 refused by name), installation pins and the client against a synthetic TS2 server. The source-closed schema6 suites test_agent.py and test_context.py are copied with package-local vector paths. The fixtures are byte-identical to verifiable-testnet/trade-settlement/fixtures and onboarding/web.",
+  "kit_extensions": "fairvenue_mcp/ and tests/test_mcp_server.py are the agent kit's optional MCP server (the pyproject mcp extra), not imported protocol source. They only call the public fairvenue_schema6 API and never change the byte-identical files above. Since TS2 the whole fairvenue_schema6 package, including installation.py and the deployment pins, is imported unchanged."
 }

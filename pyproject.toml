@@ -60,6 +60,7 @@ extend-exclude = [
   "experimental/native-testnet/tests/test_native_credentials.py",
   "experimental/native-testnet/tests/test_native_testnet.py",
   "experimental/native-testnet/tests/test_package_integrity.py",
+  "experimental/native-testnet/tests/test_ts2_codec.py",
 ]
 
 [tool.ruff.lint]

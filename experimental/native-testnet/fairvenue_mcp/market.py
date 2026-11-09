@@ -1,4 +1,4 @@
-"""Validated native market snapshots and exact decimal helpers.
+"""Validated TS2 native market snapshots and exact decimal helpers.
 
 The public book is native resting liquidity on the operator-run TESTNET, never
 an external venue's book. Snapshots are soft (operator-trusted) state, not
@@ -16,22 +16,36 @@ from typing import Any
 
 SYMBOL = "BTCUSDC"
 EXPLORER_TX = "https://sepolia.arbiscan.io/tx/"
+MARKET_SCHEMA = "fairvenue-ts2-public-market-v1"
+#: A trade's TS2 settlement state, never a V4 proof object.
+SETTLEMENT_STATES = (
+    "operator_soft",
+    "operator_sealed",
+    "not_settled",
+    "controller_observed_settled",
+    "controller_observed_settled_final",
+)
 
 _DECIMAL = re.compile(r"(0|[1-9][0-9]*)(\.[0-9]+)?")
+_SIGNED = re.compile(r"-?(0|[1-9][0-9]*)(\.[0-9]+)?")
 _UINT = re.compile(r"0|[1-9][0-9]{0,19}")
 _HASH = re.compile(r"0x[0-9a-f]{64}")
+_REASON = re.compile(r"[a-z][a-z0-9_]{0,47}")
 
 
 class MarketDataError(Exception):
-    """The public reply did not match the pinned native TESTNET market."""
+    """The public reply did not match the pinned TS2 TESTNET market."""
 
 
 def _fail(what: str) -> MarketDataError:
     return MarketDataError(f"Unexpected public market data ({what}). Nothing was assumed.")
 
 
-def decimal_text(value: object, *, positive: bool = False, what: str = "decimal") -> Decimal:
-    if not isinstance(value, str) or len(value) > 80 or _DECIMAL.fullmatch(value) is None:
+def decimal_text(
+    value: object, *, positive: bool = False, signed: bool = False, what: str = "decimal"
+) -> Decimal:
+    pattern = _SIGNED if signed else _DECIMAL
+    if not isinstance(value, str) or len(value) > 80 or pattern.fullmatch(value) is None:
         raise _fail(what)
     number = Decimal(value)
     if positive and number <= 0:
@@ -88,33 +102,26 @@ class Trade:
     quantity: Decimal
     taker_side: str
     time_ms: int
-    proof: Mapping[str, Any]
+    batch: str | None
+    settlement: Mapping[str, Any]
 
     def view(self) -> dict[str, Any]:
-        status = self.proof.get("status")
-        proof: dict[str, Any] = {
-            "status": status
-            if status in ("pending", "sp1_verified_operator_committed")
-            else "unknown"
-        }
-        batch = self.proof.get("batch_number")
-        if isinstance(batch, str) and _UINT.fullmatch(batch):
-            proof["batch"] = batch
-        for key, label in (
-            ("proof_registration_transaction_hash", "registration_tx"),
-            ("finalization_transaction_hash", "finalization_tx"),
-        ):
-            value = self.proof.get(key)
-            if isinstance(value, str) and _HASH.fullmatch(value):
-                proof[label] = EXPLORER_TX + value
-        return {
+        state = self.settlement.get("state")
+        settlement: dict[str, Any] = {"state": state if state in SETTLEMENT_STATES else "unknown"}
+        transaction = self.settlement.get("transaction_hash")
+        if isinstance(transaction, str) and _HASH.fullmatch(transaction):
+            settlement["settle_tx"] = EXPLORER_TX + transaction
+        view: dict[str, Any] = {
             "trade_id": self.trade_id,
             "price": fmt(self.price),
             "quantity": fmt(self.quantity),
             "taker_side": self.taker_side,
             "time": utc(self.time_ms),
-            "proof": proof,
+            "settlement": settlement,
         }
+        if self.batch is not None:
+            view["batch"] = self.batch
+        return view
 
 
 @dataclass(frozen=True)
@@ -122,8 +129,7 @@ class Market:
     protocol_time_ms: int
     mark_price: Decimal | None
     batch: int
-    step: int | None
-    state_root: str
+    lineage: int
     bids: tuple[Level, ...]
     asks: tuple[Level, ...]
     trades: tuple[Trade, ...]
@@ -131,8 +137,10 @@ class Market:
     tick_size: Decimal
     step_size: Decimal
     fairlag_ms: int
-    voided_batches: tuple[Mapping[str, Any], ...]
-    native_policy: Any
+    default_leverage: str | None
+    admission_open: bool
+    admission_reasons: tuple[str, ...]
+    config_hash: str
 
     @property
     def best_bid(self) -> Level | None:
@@ -157,7 +165,7 @@ class Market:
         return (
             self.mark_price,
             self.batch,
-            self.step,
+            self.lineage,
             self.bids[:5],
             self.asks[:5],
             self.trades[0].trade_id if self.trades else None,
@@ -184,39 +192,54 @@ def _levels(rows: object, *, descending: bool) -> tuple[Level, ...]:
     return tuple(levels)
 
 
-def parse_market(value: Mapping[str, Any], settlement: str) -> Market:
-    """Validate one ``native_market`` reply against the installed deployment pin."""
+def _admission(value: object) -> tuple[bool, tuple[str, ...]]:
+    if not isinstance(value, dict) or set(value) != {"open", "reasons"}:
+        raise _fail("admission")
+    is_open, reasons = value["open"], value["reasons"]
     if (
-        value.get("schema") != "fairvenue-operator-beta-market-v1"
+        not isinstance(is_open, bool)
+        or not isinstance(reasons, list)
+        or len(reasons) > 8
+        or any(not isinstance(item, str) or _REASON.fullmatch(item) is None for item in reasons)
+        or is_open != (not reasons)
+    ):
+        raise _fail("admission")
+    return is_open, tuple(reasons)
+
+
+def parse_market(value: Mapping[str, Any], settlement: str) -> Market:
+    """Validate one TS2 ``native_market`` reply against the installed settlement."""
+    if (
+        value.get("schema") != MARKET_SCHEMA
         or value.get("environment") != "TESTNET"
         or value.get("chain_id") != 421614
         or value.get("settlement") != settlement
         or value.get("symbol") != SYMBOL
-        or value.get("source") != "operator_trusted_testnet_soft_snapshot"
+        or value.get("source") != "operator_local_native_soft_snapshot"
         or value.get("proof_backed") is not False
         or value.get("l1_finality_verified") is not False
         or value.get("public_release_go") is not False
     ):
         raise _fail("deployment or market identity")
-    prefix = value.get("prefix")
-    if not isinstance(prefix, dict):
-        raise _fail("prefix")
-    opening, head = prefix.get("opening"), prefix.get("head")
-    if not isinstance(opening, dict) or not isinstance(head, dict):
-        raise _fail("prefix")
-    root = head.get("next_root")
-    if not isinstance(root, str) or _HASH.fullmatch(root) is None:
-        raise _fail("state root")
-    step = head.get("count")
+    config_hash = value.get("config_hash")
+    if not isinstance(config_hash, str) or _HASH.fullmatch(config_hash) is None:
+        raise _fail("config hash")
+    batch = value.get("batch")
+    if not isinstance(batch, dict):
+        raise _fail("batch")
     bids = _levels(value.get("bids"), descending=True)
     asks = _levels(value.get("asks"), descending=False)
     if bids and asks and bids[0].price >= asks[0].price:
         raise _fail("crossed book")
+    raw_trades = value.get("trades")
+    if not isinstance(raw_trades, list) or len(raw_trades) > 64:
+        raise _fail("trades")
     trades: list[Trade] = []
-    for row in value.get("trades") or []:
+    for row in raw_trades:
         if not isinstance(row, dict) or row.get("side") not in ("BUY", "SELL"):
             raise _fail("trade")
-        proof = row.get("proof")
+        settled = row.get("settlement")
+        trade_batch = row.get("batch_number")
         trades.append(
             Trade(
                 trade_id=str(uint(row.get("trade_id"), what="trade id")),
@@ -224,7 +247,8 @@ def parse_market(value: Mapping[str, Any], settlement: str) -> Market:
                 quantity=decimal_text(row.get("quantity"), positive=True, what="trade quantity"),
                 taker_side=row["side"],
                 time_ms=uint(row.get("timestamp_ms"), what="trade time"),
-                proof=proof if isinstance(proof, dict) else {},
+                batch=str(uint(trade_batch, what="trade batch")) if trade_batch else None,
+                settlement=settled if isinstance(settled, dict) else {},
             )
         )
     fees = value.get("fee_schedule")
@@ -232,7 +256,7 @@ def parse_market(value: Mapping[str, Any], settlement: str) -> Market:
     if not isinstance(fees, dict) or not isinstance(rules, dict):
         raise _fail("fees or rules")
     fee_view = {
-        key: fmt(decimal_text(fees.get(key), what="fee"))
+        key: fmt(decimal_text(fees.get(key), signed=True, what="fee"))
         for key in (
             "fixed_maker_rate",
             "fixed_taker_rate",
@@ -240,14 +264,14 @@ def parse_market(value: Mapping[str, Any], settlement: str) -> Market:
             "pnl_taker_surcharge_rate",
         )
     }
+    leverage = rules.get("default_leverage")
     mark = value.get("mark_price")
-    voided = value.get("voided_batches") or []
+    is_open, reasons = _admission(value.get("admission"))
     return Market(
         protocol_time_ms=uint(value.get("protocol_time_ms"), what="protocol time"),
         mark_price=None if mark is None else decimal_text(mark, positive=True, what="mark"),
-        batch=uint(opening.get("batch"), what="batch"),
-        step=step if isinstance(step, int) and not isinstance(step, bool) else None,
-        state_root=root,
+        batch=uint(batch.get("open_batch_number"), what="batch"),
+        lineage=uint(batch.get("lineage"), what="lineage"),
         bids=bids,
         asks=asks,
         trades=tuple(trades),
@@ -255,28 +279,15 @@ def parse_market(value: Mapping[str, Any], settlement: str) -> Market:
         tick_size=decimal_text(rules.get("tick_size"), positive=True, what="tick size"),
         step_size=decimal_text(rules.get("step_size"), positive=True, what="step size"),
         fairlag_ms=uint(rules.get("fairlag_ms"), what="FairLag"),
-        voided_batches=tuple(
-            view for item in (voided if isinstance(voided, list) else []) if (view := _voided(item))
+        default_leverage=(
+            fmt(decimal_text(leverage, positive=True, what="leverage"))
+            if leverage is not None
+            else None
         ),
-        native_policy=value.get("native_policy"),
+        admission_open=is_open,
+        admission_reasons=reasons,
+        config_hash=config_hash,
     )
-
-
-def _voided(item: object) -> dict[str, Any] | None:
-    """Only the known public fields of a voided batch, with checked types."""
-    if not isinstance(item, dict):
-        return None
-    view: dict[str, Any] = {}
-    for key in ("batch", "generation", "replacement_generation"):
-        if isinstance(item.get(key), int) and not isinstance(item.get(key), bool):
-            view[key] = item[key]
-    transaction = item.get("replacement_transaction")
-    if isinstance(transaction, str) and _HASH.fullmatch(transaction):
-        view["replacement_transaction"] = transaction
-    reason = item.get("reason")
-    if isinstance(reason, str) and len(reason) <= 32 and reason.replace("_", "").isalpha():
-        view["reason"] = reason
-    return view if "batch" in view else None
 
 
 def market_view(market: Market, *, depth: int, trades: int) -> dict[str, Any]:
@@ -289,10 +300,15 @@ def market_view(market: Market, *, depth: int, trades: int) -> dict[str, Any]:
     return {
         "symbol": SYMBOL,
         "environment": "TESTNET (Arbitrum Sepolia mock tokens, no real funds)",
+        "protocol": "TS2",
         "as_of": utc(market.protocol_time_ms),
         "protocol_time_ms": str(market.protocol_time_ms),
         "batch": str(market.batch),
-        "step": market.step,
+        "lineage": str(market.lineage),
+        "admission": {
+            "open": market.admission_open,
+            "reasons": list(market.admission_reasons),
+        },
         "mark_price": None if market.mark_price is None else fmt(market.mark_price),
         "best_bid": None if best_bid is None else best_bid.view(),
         "best_ask": None if best_ask is None else best_ask.view(),
@@ -307,9 +323,10 @@ def market_view(market: Market, *, depth: int, trades: int) -> dict[str, Any]:
             "tick_size": fmt(market.tick_size),
             "step_size": fmt(market.step_size),
             "fairlag_ms": str(market.fairlag_ms),
-            "order_types": "LIMIT only: GTC (optionally post-only) or price-protected IOC",
+            "default_leverage": market.default_leverage,
+            "order_types": "LIMIT only: GTC (optionally post-only) or price-protected IOC. "
+            "Prices must be whole ticks and sizes whole steps.",
         },
-        "voided_batches": [dict(item) for item in market.voided_batches[:3]],
         "finality": "soft operator-trusted snapshot, not proof-verified or L1-final",
     }
 

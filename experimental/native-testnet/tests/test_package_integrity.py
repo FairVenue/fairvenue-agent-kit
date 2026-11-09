@@ -24,19 +24,25 @@ class ImportedSourceIntegrityTests(unittest.TestCase):
         self.assertIn("fairvenue_schema6/native_testnet.py", modules)
         self.assertIn("fairvenue_schema6/protocol.py", modules)
         self.assertIn("requirements.txt", modules)
+        # Every file of the protocol package is an exact import, none is kit-edited.
+        package = {
+            path.relative_to(ROOT).as_posix()
+            for path in (ROOT / "fairvenue_schema6").rglob("*")
+            if path.is_file() and "__pycache__" not in path.parts
+        }
+        self.assertEqual(package, {path for path in modules if path.startswith("fairvenue_schema6/")})
+        self.assertIn("fairvenue_schema6/ts2.py", modules)
+        self.assertIn("fairvenue_schema6/deployments/arbitrum-sepolia-ts2.json", modules)
         self.assertEqual(
-            {entry["path"] for entry in manifest["public_extensions"]},
-            {
-                "pyproject.toml",
-                "fairvenue_schema6/__init__.py",
-                "fairvenue_schema6/installation.py",
-                "fairvenue_schema6/deployments/arbitrum-sepolia-1k.json",
-            },
+            {entry["path"] for entry in manifest["public_extensions"]}, {"pyproject.toml"}
         )
 
     def test_native_package_does_not_depend_on_an_external_fixture_checkout(self):
         for test in (ROOT / "tests").glob("test_*.py"):
             self.assertNotIn('ROOT.parent / "' + "web/", test.read_text())
+        for name in ("ts2-client-vectors-v1.json", "ts2-client-security-vectors-v1.json"):
+            vector = json.loads((ROOT / "tests/fixtures" / name).read_text())
+            self.assertTrue(vector["schema"].startswith("fairvenue-ts2-client-"))
         for name in ("agent-commands.golden.json", "agent-context.golden.json"):
             vector = json.loads((ROOT / "tests/fixtures" / name).read_text())
             if name == "agent-commands.golden.json":

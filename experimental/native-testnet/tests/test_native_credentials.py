@@ -1,4 +1,4 @@
-"""Private synthetic exports only: no HTTP, live credentials or activation evidence."""
+"""Private synthetic TS2 bot key exports only: no HTTP, live credentials or activation."""
 
 import asyncio
 import copy
@@ -10,44 +10,28 @@ import unittest
 from unittest.mock import patch
 
 from fairvenue_schema6 import (
-    AgentClient, AgentError, CryptoPrimitives, build_agent_command_signables,
-    load_native_testnet_agent_key, load_v1_agent_key,
+    AgentError, CryptoPrimitives, load_native_testnet_agent_key, load_v1_agent_key, ts2,
 )
-from fairvenue_schema6 import key_file
 
-SETTLEMENT = "0xaaebec860fc2ec7f77379ac3c4b892266a76bcbf"
-MOCK_TOKEN = "0x2b62f3c0663d9590113e24ec588018bcb81a7d29"
 API_URL = "https://native-testnet.example/"
+# Synthetic 65-byte owner signature. The server, never this package, recovers it.
+OWNER_SIGNATURE = "0x" + "5a" * 64 + "1b"
 
 
-def fixture():
+def fixture(*, issued=0, expires=2_592_000_000):
+    """``(installed pins, exported TS2 bot key)`` with an ephemeral local test key."""
     from nacl.signing import SigningKey
 
     key = SigningKey.generate()  # Ephemeral local test key, never an installed principal.
-    policy = {
-        "domain": {"chain_id": 421614, "settlement": list(bytes.fromhex(SETTLEMENT[2:]))},
-        "market_id": [8] * 32,
-        "config_version": "3", "epoch_ms": "100", "absolute_error_ms": "20",
-        "max_disagreement_epochs": "1", "max_lifetime_epochs": "100",
-        "max_oracle_age_ms": "1000", "max_oracle_future_ms": "0",
-        "gateways": [{"gateway_id": index, "key_id": index,
-                      "public_key": "0x" + bytes(SigningKey(bytes([index]) * 32).verify_key).hex(),
-                      "first_epoch": "0", "end_epoch": str((1 << 64) - 1)}
-                     for index in (1, 2, 3)],
+    material = {
+        "schema": ts2.MATERIAL_SCHEMA, **ts2.PINS, "owner": "0x" + "04" * 20,
+        "account_key": "0x" + "00" * 31 + "07", "agent_public_key": "0x" + bytes(key.verify_key).hex(),
+        "permissions": 11, "nonce": "1", "issued_at_ms": str(issued),
+        "expires_at_ms": str(expires), "max_expiry_ms": str(expires), "can_withdraw": False,
     }
-    grant = {
-        "schema": "fairvenue-v1-agent-public-grant-v1", "chainId": "421614",
-        "settlement": SETTLEMENT, "owner": "0x" + "04" * 20,
-        "account": "0x" + "0" * 63 + "7",
-        "agentPublicKey": "0x" + bytes(key.verify_key).hex(),
-        "permissions": 15, "delegationNonce": "1", "issuedAtMs": "0",
-        "expiresAtMs": "40000", "maxExpiryMs": "40000", "canWithdraw": False,
-    }
-    return policy, {
-        "schema": "fairvenue-native-testnet-agent-v1", "environment": "TESTNET",
-        "settlement_mode": "mock_token_sp1_operator_beta", "chain_id": 421614,
-        "settlement": SETTLEMENT, "mock_token": MOCK_TOKEN, "api_namespace": "/v1",
-        "api_url": API_URL, "agent_policy": copy.deepcopy(policy), "public_grant": grant,
+    return copy.deepcopy(ts2.PINS), {
+        "schema": ts2.KEY_SCHEMA, "environment": "TESTNET", **ts2.PINS, "api_url": API_URL,
+        "delegation": {"material": material, "signature": OWNER_SIGNATURE},
         "private_key_seed": "0x" + bytes(key).hex(),
     }
 
@@ -61,94 +45,106 @@ def write(directory, value, *, name="key.json", mode=0o600):
     return path
 
 
+def v4_export():
+    """The retired V4 bot key shape (public fields only matter: it is refused by name)."""
+    return {"schema": ts2.V4_KEY_SCHEMA, "environment": "TESTNET",
+            "settlement_mode": "mock_token_sp1_operator_beta", "chain_id": 421614,
+            "settlement": "0xaaebec860fc2ec7f77379ac3c4b892266a76bcbf",
+            "mock_token": "0x2b62f3c0663d9590113e24ec588018bcb81a7d29", "api_namespace": "/v1",
+            "api_url": API_URL, "agent_policy": {}, "public_grant": {},
+            "private_key_seed": "0x" + "42" * 32}
+
+
 class NativeCredentialTests(unittest.TestCase):
     def load(self, path, policy, api=API_URL):
         return load_native_testnet_agent_key(path, policy=policy, approved_api_url=api)
 
-    def test_browser_shape_owned_file_signs_exact_existing_native_codec_without_io(self):
+    def test_browser_shape_owned_file_signs_exact_ts2_codec_without_io(self):
         for mode in (0o400, 0o600):
-            policy, exported = fixture()
+            pins, exported = fixture()
             with tempfile.TemporaryDirectory(prefix="native-key-offline-") as directory:
                 path = write(directory, exported, mode=mode)
                 before = Path(path).read_bytes()
                 with patch("fairvenue_schema6.transport._http", side_effect=AssertionError("no I/O")):
-                    signer, grant = self.load(path, policy)
-                context = {
-                    "authenticated": True, "session_scope": "01" * 32, "owner": grant["owner"],
-                    "protocol_time_ms": "1000", "prefix": {
-                        "domain": policy["domain"],
-                        "opening": {"previous_root": [1] * 32, "batch": 1, "generation": 1,
-                                    "opening_commitment": [2] * 32},
-                        "head": {"count": 0, "chain_hash": "0x" + "00" * 32,
-                                 "public_data_hash": "0x" + "00" * 32, "next_root": "0x" + "01" * 32},
-                    },
-                }
-                signables = build_agent_command_signables(
-                    policy=policy, grant=grant, context=context,
-                    input={"nonce": "1", "expiresAtMs": "20000",
-                           "action": {"type": "cancel", "order_id": "1"}},
-                )
-                message = bytes.fromhex(signables["intent_signing_bytes"][2:])
-                signature = asyncio.run(signer.sign_bytes(message))
-                self.assertTrue(CryptoPrimitives().verify("0x" + signature.hex(), message, signer.public_key))
-                self.assertEqual(grant, exported["public_grant"])
-                self.assertEqual(signer.public_key, grant["agentPublicKey"])
+                    signer, grant = self.load(path, pins)
+                material = grant["material"]
+                action = {"type": "kill_all", "client_nonce": "7"}
+                crypto = CryptoPrimitives()
+                message, _ = ts2.signing_message(pins, material["account_key"],
+                                                 material["agent_public_key"], action, crypto)
+                signature = "0x" + asyncio.run(signer.sign_bytes(message)).hex()
+                signed = {"schema": ts2.REQUEST_SCHEMA, **pins,
+                          "account_key": material["account_key"],
+                          "agent_public_key": signer.public_key, "signature": signature,
+                          "action": action}
+                self.assertEqual(ts2.request_copy(signed, pins, crypto), signed)
+                self.assertEqual(grant, exported["delegation"])
+                self.assertEqual(signer.public_key, material["agent_public_key"])
                 self.assertNotIn(exported["private_key_seed"][2:], repr(signer))
                 self.assertEqual(Path(path).read_bytes(), before)
                 self.assertEqual(os.stat(path).st_mode & 0o777, mode)
 
-    def test_exact_testnet_deployment_labels_policy_grant_and_seed_required(self):
+    def test_v4_key_files_are_refused_by_name(self):
+        pins, _ = fixture()
+        with tempfile.TemporaryDirectory(prefix="native-key-offline-") as directory:
+            path = write(directory, v4_export())
+            with self.assertRaises(AgentError) as caught:
+                self.load(path, pins)
+            self.assertEqual(caught.exception.code, "v4_key")
+            self.assertEqual(str(caught.exception), "TS2: create a new bot key.")
+
+    def test_another_ts2_deployment_is_a_previous_deployment_key(self):
+        for field, value in (("settlement", "0x" + "09" * 20), ("config_hash", "0x" + "11" * 32)):
+            pins, exported = fixture()
+            exported[field] = value
+            exported["delegation"]["material"][field] = value
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                with self.assertRaises(AgentError) as caught:
+                    self.load(write(directory, exported), pins)
+                self.assertEqual(caught.exception.code, "previous_deployment")
+                self.assertIn("previous testnet deployment", str(caught.exception))
+
+    def test_exact_testnet_labels_grant_and_seed_required(self):
         changes = [
             lambda v: v.update(schema="arena-agent-key-v1"),
             lambda v: v.pop("schema"),
             lambda v: v.update(environment="PRODUCTION"),
-            lambda v: v.update(settlement_mode="virtual"),
             lambda v: v.update(chain_id=1),
             lambda v: v.update(chain_id=True),
             lambda v: v.update(chain_id="421614"),
-            lambda v: v.update(settlement="0x" + "09" * 20),
-            lambda v: v.update(mock_token="0xaf88d065e77c8cc2239327c5edb3a432268e5831"),
-            lambda v: v.update(api_namespace="/api/v1"),
-            lambda v: v.update(private_key_seed="0x" + "00" * 32),
+            lambda v: v.update(settlement="0x" + "00" * 20),
             lambda v: v.update(private_key_seed="0x" + "00" * 31),
+            lambda v: v.update(private_key_seed="0x" + "AB" * 32),
             lambda v: v.update(private_key="must not accept a second secret field"),
-            lambda v: v["public_grant"].update(canWithdraw=True),
-            lambda v: v["public_grant"].update(permissions=16),
-            lambda v: v["public_grant"].update(agentPublicKey="0x01" + "00" * 31),
-            lambda v: v["public_grant"].update(settlement="0x" + "09" * 20),
-            lambda v: v["agent_policy"].update(epoch_ms="99"),
-            lambda v: v["agent_policy"].update(config_version="4"),
-            lambda v: v["agent_policy"]["domain"].update(chain_id=1),
-            lambda v: v["agent_policy"]["gateways"][1].update(
-                public_key=v["agent_policy"]["gateways"][0]["public_key"]),
+            lambda v: v.update(public_grant={}),
+            lambda v: v["delegation"]["material"].update(can_withdraw=True),
+            lambda v: v["delegation"]["material"].update(permissions=16),
+            lambda v: v["delegation"]["material"].update(permissions=4),
+            lambda v: v["delegation"]["material"].update(agent_public_key="0x01" + "00" * 31),
+            lambda v: v["delegation"]["material"].update(max_expiry_ms="1"),
+            lambda v: v["delegation"]["material"].update(settlement="0x" + "09" * 20),
+            lambda v: v["delegation"].update(signature="0x" + "5a" * 64),
+            lambda v: v["delegation"].update(extra=True),
         ]
         for index, change in enumerate(changes):
-            policy, exported = fixture()
+            pins, exported = fixture()
             change(exported)
             with self.subTest(case=index), tempfile.TemporaryDirectory(prefix="native-key-offline-") as directory:
                 path = write(directory, exported)
                 before = Path(path).read_bytes()
                 with self.assertRaises(AgentError) as caught:
-                    self.load(path, policy)
+                    self.load(path, pins)
                 self.assertNotIn(path, str(caught.exception))
-                self.assertNotIn(exported["private_key_seed"], str(caught.exception))
+                self.assertNotIn(exported.get("private_key_seed", "0x")[2:] or "-", str(caught.exception))
                 self.assertEqual(Path(path).read_bytes(), before)
 
-    def test_previous_season_credentials_refuse_even_with_matching_old_policy(self):
-        policy, exported = fixture()
-        old_settlement = "0x8e50a346a3121ae03ccae6c64330981b2c18e9e9"
-        policy["domain"]["settlement"] = list(bytes.fromhex(old_settlement[2:]))
-        exported["settlement"] = old_settlement
-        exported["mock_token"] = "0xed3fd1b885102d77ed13f8d576e33965ac8d4215"
-        exported["agent_policy"] = copy.deepcopy(policy)
-        exported["public_grant"]["settlement"] = old_settlement
-        with tempfile.TemporaryDirectory(prefix="native-old-season-offline-") as directory:
-            path = write(directory, exported)
-            before = Path(path).read_bytes()
-            with patch("fairvenue_schema6.transport._http", side_effect=AssertionError("no I/O")):
-                with self.assertRaises(AgentError):
-                    self.load(path, policy)
-            self.assertEqual(Path(path).read_bytes(), before)
+    def test_seed_must_derive_the_delegated_agent_key(self):
+        pins, exported = fixture()
+        _, other = fixture()
+        exported["private_key_seed"] = other["private_key_seed"]
+        with tempfile.TemporaryDirectory(prefix="native-key-offline-") as directory:
+            with self.assertRaises(AgentError):
+                self.load(write(directory, exported), pins)
 
     def test_approved_origin_not_discovered_from_file_or_redirectable(self):
         invalid = ("https://other.example/", "http://127.0.0.1/", "https://native-testnet.example",
@@ -157,112 +153,89 @@ class NativeCredentialTests(unittest.TestCase):
                    "https://NATIVE-TESTNET.example/", "https://native-testnet.example:443/",
                    "\nhttps://native-testnet.example/", "https://native-testnet.example/\n")
         for api in invalid:
-            policy, exported = fixture()
+            pins, exported = fixture()
             with tempfile.TemporaryDirectory(prefix="native-key-offline-") as directory:
                 path = write(directory, exported)
                 with self.assertRaises(AgentError):
-                    self.load(path, policy, api)
+                    self.load(path, pins, api)
             # Even a matching explicit approval cannot make a malformed URL valid.
             if api != "https://other.example/":
                 exported["api_url"] = api
                 with tempfile.TemporaryDirectory(prefix="native-key-offline-") as directory:
                     with self.assertRaises(AgentError):
-                        self.load(write(directory, exported), policy, api)
-        policy, exported = fixture()
+                        self.load(write(directory, exported), pins, api)
+        pins, exported = fixture()
         with tempfile.TemporaryDirectory(prefix="native-key-offline-") as directory:
             with self.assertRaises(AgentError):
-                self.load(write(directory, exported), policy, None)
+                self.load(write(directory, exported), pins, None)
 
-    def test_installed_policy_cannot_be_replaced_by_embedded_policy(self):
-        policy, exported = fixture()
+    def test_installed_pins_cannot_be_replaced_by_the_file_or_caller(self):
+        pins, exported = fixture()
         for change in (
-            lambda p: p.update(max_lifetime_epochs="101"),
-            lambda p: p["domain"].update(settlement=[9] * 20),
-            lambda p: p["gateways"][0].update(end_epoch="18446744073709551614"),
+            lambda p: p.update(settlement="0x" + "09" * 20),
+            lambda p: p.update(config_hash="0x" + "11" * 32),
+            lambda p: p.update(chain_id=31337),
+            lambda p: p.update(market_id="0x" + "01" * 32),
         ):
-            installed = copy.deepcopy(policy)
+            installed = copy.deepcopy(pins)
             change(installed)
             with tempfile.TemporaryDirectory(prefix="native-key-offline-") as directory:
                 with self.assertRaises(AgentError):
                     self.load(write(directory, exported), installed)
-        # The same immutable roster may use a different input ordering.
-        installed = copy.deepcopy(policy)
-        installed["gateways"].reverse()
-        with tempfile.TemporaryDirectory(prefix="native-key-offline-") as directory:
-            self.load(write(directory, exported), installed)
 
     def test_legacy_isolated_schema_remains_separate_not_silently_converted(self):
-        policy, exported = fixture()
+        pins, exported = fixture()
         legacy = {"schema": "fairvenue-isolated-v1-agent-key-v1", "chain_id": 421614,
-                  "settlement": SETTLEMENT, "agent_public_key": exported["public_grant"]["agentPublicKey"],
-                  "public_grant": exported["public_grant"], "private_key": exported["private_key_seed"]}
+                  "settlement": ts2.SETTLEMENT,
+                  "agent_public_key": exported["delegation"]["material"]["agent_public_key"],
+                  "public_grant": {}, "private_key": exported["private_key_seed"]}
         with tempfile.TemporaryDirectory(prefix="native-key-offline-") as directory:
             old_path = write(directory, legacy, name="old.json")
             new_path = write(directory, exported)
-            old_signer, grant = load_v1_agent_key(old_path, policy=policy)
-            new_signer, new_grant = self.load(new_path, policy)
-            self.assertEqual((old_signer.public_key, grant), (new_signer.public_key, new_grant))
+            self.load(new_path, pins)
             with self.assertRaises(AgentError):
-                self.load(old_path, policy)
+                self.load(old_path, pins)
             with self.assertRaises(AgentError):
-                load_v1_agent_key(new_path, policy=policy)
+                load_v1_agent_key(new_path, policy=pins)
 
     def test_private_regular_file_only_without_permission_repair(self):
-        policy, exported = fixture()
+        pins, exported = fixture()
         with tempfile.TemporaryDirectory(prefix="native-key-offline-") as directory:
             path = write(directory, exported)
             link = str(Path(directory).resolve() / "link")
             os.symlink(path, link)
             with self.assertRaises(AgentError):
-                self.load(link, policy)
+                self.load(link, pins)
             os.unlink(link)
             os.link(path, link)
             with self.assertRaises(AgentError):
-                self.load(path, policy)
+                self.load(path, pins)
             os.unlink(link)
             os.chmod(path, 0o644)
             with self.assertRaises(AgentError):
-                self.load(path, policy)
+                self.load(path, pins)
             self.assertEqual(os.stat(path).st_mode & 0o777, 0o644)
             fifo = str(Path(directory).resolve() / "fifo")
             os.mkfifo(fifo, 0o600)
             with self.assertRaises(AgentError):
-                self.load(fifo, policy)
+                self.load(fifo, pins)
 
     def test_duplicate_unknown_oversize_and_descriptor_mutation_refused(self):
-        policy, exported = fixture()
+        pins, exported = fixture()
         raw = json.dumps(exported, separators=(",", ":")).encode()
         with tempfile.TemporaryDirectory(prefix="native-key-offline-") as directory:
             for index, data in enumerate((raw[:-1] + b',"chain_id":421614}', b"{bad", b" " * 16385)):
                 with self.assertRaises(AgentError):
-                    self.load(write(directory, data, name=f"bad-{index}"), policy)
+                    self.load(write(directory, data, name=f"bad-{index}"), pins)
             path = write(directory, exported)
-            original = key_file.grant_copy
+            original = ts2.grant_copy
 
             def change_after_read(*args):
                 os.chmod(path, 0o400)
                 return original(*args)
 
-            with patch.object(key_file, "grant_copy", side_effect=change_after_read), self.assertRaises(AgentError):
-                self.load(path, policy)
-
-    def test_loading_does_not_open_existing_trading_activation_gate(self):
-        policy, exported = fixture()
-        with tempfile.TemporaryDirectory(prefix="native-key-offline-") as directory:
-            signer, grant = self.load(write(directory, exported), policy)
-
-            class NoTransport:
-                async def post(self, *_):
-                    raise AssertionError("no HTTP")
-
-            async def no_context():
-                raise AssertionError("no context")
-
-            client = AgentClient(policy=policy, grant=grant, signer=signer,
-                                 current_context=no_context, transport=NoTransport())
-            with self.assertRaises(AgentError) as caught:
-                asyncio.run(client.run(None))
-            self.assertEqual(caught.exception.code, "activation_closed")
+            with patch.object(ts2, "grant_copy", side_effect=change_after_read), self.assertRaises(AgentError):
+                self.load(path, pins)
 
 
 if __name__ == "__main__":

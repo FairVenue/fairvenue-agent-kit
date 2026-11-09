@@ -1,4 +1,4 @@
-"""Explicit owner-private V1 export reader; never adopts Arena/V0 or repairs permissions."""
+"""Explicit owner-private key export readers; never adopt Arena/V0/V4 or repair permissions."""
 
 from __future__ import annotations
 
@@ -6,14 +6,14 @@ import os
 import stat
 from urllib.parse import urlsplit
 
+from . import ts2
 from .client import _json
 from .crypto import CryptoPrimitives, MemorySigner
 from .protocol import AgentError, encoded_hex, exact, fail, grant_copy, hex_value, policy_copy
 from .transport import HttpTransport
 
-_NATIVE_SCHEMA = "fairvenue-native-testnet-agent-v1"
-_NATIVE_SETTLEMENT = "0xaaebec860fc2ec7f77379ac3c4b892266a76bcbf"
-_NATIVE_MOCK_TOKEN = "0x2b62f3c0663d9590113e24ec588018bcb81a7d29"
+# Codes a caller must see: a V4 file, or a TS2 key of another deployment.
+_NAMED = ("v4_key", "previous_deployment", "crypto_unavailable")
 
 
 def _identity(info):
@@ -43,25 +43,28 @@ def _native_api_url(value):
 
 def _material(exported, *, policy, approved_api_url, native):
     primitives = CryptoPrimitives()
-    pinned = policy_copy(policy, primitives)
     if native:
-        exact(exported, ("schema", "environment", "settlement_mode", "chain_id",
-                         "settlement", "mock_token", "api_namespace", "api_url",
-                         "agent_policy", "public_grant", "private_key_seed"))
-        if (exported["schema"] != _NATIVE_SCHEMA or exported["environment"] != "TESTNET"
-                or exported["settlement_mode"] != "mock_token_sp1_operator_beta"
-                or type(exported["chain_id"]) is not int or exported["chain_id"] != 421614
-                or exported["settlement"] != _NATIVE_SETTLEMENT
-                or exported["mock_token"] != _NATIVE_MOCK_TOKEN
-                or exported["api_namespace"] != "/v1"
-                or exported["api_url"] != _native_api_url(approved_api_url)
-                or encoded_hex(pinned["domain"]["settlement"]) != _NATIVE_SETTLEMENT
-                or policy_copy(exported["agent_policy"], primitives) != pinned):
+        # A V4 key can never sign TS2 commands. Refuse it by name, never adapt it.
+        if type(exported) is dict and exported.get("schema") == ts2.V4_KEY_SCHEMA:
+            fail("v4_key")
+        pins = ts2.pinned(policy)
+        exact(exported, ("schema", "environment", "chain_id", "settlement", "config_hash",
+                         "api_url", "delegation", "private_key_seed"))
+        if (exported["schema"] != ts2.KEY_SCHEMA or exported["environment"] != "TESTNET"
+                or type(exported["chain_id"]) is not int or exported["chain_id"] != ts2.CHAIN_ID):
             fail()
-        public_grant = grant_copy(exported["public_grant"], pinned, primitives)
-        public_key = public_grant["agentPublicKey"]
+        # A well-formed TS2 key pinned to another settlement or config hash is
+        # another deployment's key. Refuse it by name, never migrate it.
+        if ts2.deployment({key: exported[key] for key in ("chain_id", "settlement",
+                                                          "config_hash")}) != pins:
+            fail("previous_deployment")
+        if exported["api_url"] != _native_api_url(approved_api_url):
+            fail()
+        public_grant = ts2.grant_copy(exported["delegation"], pins)
+        public_key = public_grant["material"]["agent_public_key"]
         seed_field = "private_key_seed"
     else:
+        pinned = policy_copy(policy, primitives)
         exact(exported, ("schema", "chain_id", "settlement", "agent_public_key", "public_grant", "private_key"))
         if (exported["schema"] != "fairvenue-isolated-v1-agent-key-v1"
                 or type(exported["chain_id"]) is not int or exported["chain_id"] != 421614
@@ -69,10 +72,12 @@ def _material(exported, *, policy, approved_api_url, native):
             fail()
         public_grant = grant_copy(exported["public_grant"], pinned, primitives)
         public_key = hex_value(exported["agent_public_key"])
+        if public_key != public_grant["agentPublicKey"]:
+            fail()
         seed_field = "private_key"
     seed = bytes.fromhex(hex_value(exported[seed_field], nonzero=False)[2:])
     signer = MemorySigner._from_v1_seed(seed)
-    if signer.public_key != public_key or signer.public_key != public_grant["agentPublicKey"]:
+    if signer.public_key != public_key:
         fail()
     return signer, public_grant
 
@@ -111,6 +116,8 @@ def _load_key(path, *, policy, approved_api_url=None, native=False):
                 or _identity(os.lstat(path)) != _identity(held) or os.path.realpath(path) != path):
             fail()
         return signer, public_grant
+    except AgentError as error:
+        raise AgentError(error.code if error.code in _NAMED else "invalid_input") from None
     except Exception:
         raise AgentError() from None
     finally:
@@ -124,9 +131,12 @@ def load_v1_agent_key(path, *, policy):
 
 
 def load_native_testnet_agent_key(path, *, policy, approved_api_url):
-    """Read the deployed native TESTNET format, returning only signer and public grant.
+    """Read a TS2 bot key (``fairvenue-ts2-testnet-agent-v1``): signer and public grant.
 
-    Policy and HTTPS API URL are independently approved installation inputs,
-    not discovered from this file. No request, activation or funding occurs.
+    ``policy`` is the installed TS2 deployment pins (chain, settlement and
+    config hash) and the HTTPS API URL an independently approved installation
+    input, never discovered from this file. A V4 ``fairvenue-native-testnet-agent-v1``
+    file raises ``AgentError("v4_key")`` and a TS2 key of another deployment
+    ``AgentError("previous_deployment")``. No request, activation or funding occurs.
     """
     return _load_key(path, policy=policy, approved_api_url=approved_api_url, native=True)

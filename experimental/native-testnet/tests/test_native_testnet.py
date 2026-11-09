@@ -1,507 +1,550 @@
-"""Synthetic native HTTP/continuity fixtures; no funded/live/proof acceptance."""
+"""Synthetic TS2 HTTP/continuity fixtures; no funded/live/proof acceptance. TEST keys only."""
+
 import asyncio
 import copy
-import hashlib
 import json
 import os
 from pathlib import Path
-import sqlite3
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
-from fairvenue_schema6 import AgentClient, AgentError, BotContextProvider, NativeTestnetClient
+from fairvenue_schema6 import AgentError, CryptoPrimitives, NativeTestnetClient, ts2
 from fairvenue_schema6 import native_testnet as native
-from fairvenue_schema6.context import _scope
-from fairvenue_schema6.protocol import NOT_PLACED, AdmitRefusal, grant_copy, jcs, policy_copy
+from fairvenue_schema6.crypto import MemorySigner
+from fairvenue_schema6.protocol import AdmitRefusal
 from fairvenue_schema6.transport import HttpTransport
-from test_context import ContextFixture
 
-API="https://native-testnet.example/"
+API = "https://native-testnet.example/"
+SEED = "0x" + "42" * 32  # Public synthetic TEST seed, never a real key.
+OWNER_SIGNATURE = "0x" + "5a" * 64 + "1b"  # Synthetic. Only the server recovers it.
+ACCOUNT_KEY = "0x" + "00" * 31 + "07"
 
 
-def not_placed(request,reason,**changes):
-    """The server's exact definitive refusal body for `request`."""
-    result={"error":"not_placed","reason":reason,
-            "request_sha256":"0x"+hashlib.sha256(jcs(request).encode()).hexdigest(),
-            "retry":NOT_PLACED[reason],"proof_backed":False,"l1_finality_verified":False,
-            "public_release_go":False,**changes}
-    return json.dumps(result,separators=(",",":")).encode()
+def body(value):
+    return json.dumps(value, separators=(",", ":")).encode()
+
+
+def not_placed(request, reason, **changes):
+    """The server's exact definitive refusal body for ``request``."""
+    return body({"error": "not_placed", "reason": reason,
+                 "request_sha256": ts2.request_sha256(request), "retry": "resign",
+                 "proof_backed": False, "l1_finality_verified": False,
+                 "public_release_go": False, **changes})
 
 
 def refusal_status(reason):
-    return 429 if reason=="rate_limited" else 409
+    return 429 if reason == "rate_limited" else 409
 
 
-class NativeFixture(ContextFixture):
-    def __init__(self):
-        super().__init__()
-        address=list(bytes.fromhex(native._NATIVE_SETTLEMENT[2:]))
-        self.policy["domain"]["settlement"]=address
-        self.grant["settlement"]=native._NATIVE_SETTLEMENT
-        self.context["prefix"]["domain"]["settlement"]=address
-        self.context["session_scope"]=_scope(policy_copy(self.policy,self.crypto),
-                                            grant_copy(self.grant,policy_copy(self.policy,self.crypto),self.crypto))
-        self.recovery_status="accepted"
-        self.recovery_edit=None
-        self.recovery_calls=0
-        self.admit_pause=None
-        self.refusal=None
-        self.refused=0
+def market(fixture, **changes):
+    """One public ``fairvenue-ts2-public-market-v1`` snapshot of the fixture."""
+    value = {
+        "schema": ts2.MARKET_SCHEMA, "environment": "TESTNET", **ts2.PINS, "symbol": "BTCUSDC",
+        "mark_price": "80000.05", "mark_observed_at_ms": fixture.context["protocol_time_ms"],
+        "protocol_time_ms": fixture.context["protocol_time_ms"],
+        "batch": {"open_batch_number": "7", "lineage": "1"},
+        "admission": {"open": True, "reasons": []},
+        "fee_schedule": {"fixed_maker_rate": "0.00003", "fixed_taker_rate": "0.00012",
+                         "pnl_base_rate": "0.02", "pnl_taker_surcharge_rate": "0.04"},
+        "market_rules": {"tick_size": "0.1", "step_size": "0.001", "fairlag_ms": "100",
+                         "default_leverage": "10"},
+        "bids": [{"price": "79999.9", "quantity": "0.02"}, {"price": "79990", "quantity": "1"}],
+        "asks": [{"price": "80000.2", "quantity": "0.01"}],
+        "trades": [{"trade_id": "9", "price": "80000.1", "quantity": "0.01", "side": "BUY",
+                    "timestamp_ms": fixture.context["protocol_time_ms"], "batch_number": "7",
+                    "lineage": "1", "settlement": {"state": "operator_soft"}}],
+        "source": "operator_local_native_soft_snapshot", "proof_backed": False,
+        "l1_finality_verified": False, "public_release_go": False,
+    }
+    value.update(changes)
+    return value
 
-    async def post(self,path,body,timeout):
-        if path=="/v1/agent/admit" and self.refusal:
-            # The server refused before any durable effect: nothing admitted.
-            self.refused+=1
-            status,reply=self.refusal(json.loads(body))
-            if status is None:
-                raise AgentError("unavailable")  # e.g. a 503 or transport error
-            raise AdmitRefusal(status,reply)
-        if path=="/v1/agent/recovery":
-            self.recovery_calls+=1
-            request=json.loads(body)
-            assert set(request)=={"signed_request"}
-            original=request["signed_request"]
-            context={**copy.deepcopy(self.context),"prefix":original["intent"]["expected"]}
-            expected=self.build({"nonce":original["intent"]["nonce"],
-                                 "expiresAtMs":original["intent"]["expires_at_ms"],
-                                 "action":original["intent"]["action"]},context)
-            for signature,message in (("intent_signature","intent_signing_bytes"),
-                                      ("ordinary_signature","ordinary_signing_hash"),
-                                      ("generation_signature","generation_signing_bytes")):
-                assert self.crypto.verify(original[signature],bytes.fromhex(expected[message][2:]),self.signer.public_key)
-            result={"schema":"fairvenue-v1-agent-recovery-v1","status":self.recovery_status,
-                    "request_sha256":"0x"+hashlib.sha256(jcs(original).encode()).hexdigest(),
-                    "step":original["intent"]["expected"]["head"]["count"],"retry_authorized":False,
-                    "proof_backed":False,"l1_finality_verified":False,"public_release_go":False}
-            if self.recovery_edit:
-                self.recovery_edit(result)
-            return json.dumps(result,separators=(",",":")).encode()
-        if path=="/v1/agent/admit" and self.admit_pause:
-            await self.admit_pause()
-        try:
-            return await super().post(path,body,timeout)
-        finally:
-            if path=="/v1/agent/admit" and self.context["prefix"]["head"]["count"]:
-                self.next_nonce=str(int(json.loads(body)["intent"]["nonce"])+1)
 
-    def client(self,directory,initialize=True):
-        return NativeTestnetClient(policy=self.policy,grant=self.grant,signer=self.signer,
-                                   transport=self,approved_api_url=API,
-                                   custody_path=str(Path(directory).resolve()/"original.sqlite"),initialize=initialize)
+class NativeFixture:
+    """A synthetic TS2 participant service: context, public market, admit, recovery."""
+
+    def __init__(self, seed=SEED, nonce="1", permissions=11):
+        self.crypto = CryptoPrimitives()
+        self.signer = MemorySigner._from_v1_seed(bytes.fromhex(seed[2:]))
+        self.seed = seed
+        now = int(time.time() * 1000)
+        self.grant = {"material": {
+            "schema": ts2.MATERIAL_SCHEMA, **ts2.PINS, "owner": "0x" + "04" * 20,
+            "account_key": ACCOUNT_KEY, "agent_public_key": self.signer.public_key,
+            "permissions": permissions, "nonce": nonce, "issued_at_ms": str(now - 60_000),
+            "expires_at_ms": str(now + 86_400_000), "max_expiry_ms": str(now + 86_400_000),
+            "can_withdraw": False}, "signature": OWNER_SIGNATURE}
+        self.policy = copy.deepcopy(ts2.PINS)
+        self.context = {**ts2.PINS, "account_key": ACCOUNT_KEY, "batch_number": "7",
+                        "lineage": "1", "protocol_time_ms": str(now), "fee_mode": 0,
+                        "leverage": "10", "account_settings_enabled": True,
+                        "admission": {"open": True, "reasons": []}}
+        self.command_nonce = 0  # The last applied security command nonce.
+        self.journal = {}  # request_sha256 -> exact request
+        self.calls = {"context": 0, "info": 0, "admit": 0, "recovery": 0}
+        self.requests, self.signed = [], []
+        self.lost_reply = False
+        self.refusal = None  # request -> (status, body); status None is an unknown failure.
+        self.recovery_status = None  # Overrides the journal-derived status.
+        self.recovery_edit = self.context_edit = self.ack_edit = None
+        self.market = market(self)
+
+    def export(self, **changes):
+        """The browser's TS2 bot key download for this fixture's key."""
+        return {"schema": ts2.KEY_SCHEMA, "environment": "TESTNET", **ts2.PINS, "api_url": API,
+                "delegation": copy.deepcopy(self.grant), "private_key_seed": self.seed, **changes}
+
+    def ack(self, request, digest, duplicate):
+        action = request["action"]
+        kind = action["type"]
+        reply = {"schema": ts2.ACK_SCHEMA, "request_sha256": digest,
+                 "config_hash": ts2.CONFIG_HASH, "status": "operator_journaled",
+                 "proofVerified": False, "publicFinality": False, "publicReleaseGo": False,
+                 "action": kind, "duplicate": duplicate}
+        position = str(len(self.journal))
+        if kind == "order":
+            _, order_id = ts2.signing_message(ts2.PINS, request["account_key"],
+                                              request["agent_public_key"], action, self.crypto)
+            reply.update(order_id=order_id, position=position, held=False,
+                         receipt={"digest": "0x" + "ab" * 32, "signature": "0x" + "cd" * 65},
+                         certificates=[])
+        elif kind in ("cancel", "kill_all"):
+            reply["receipt"] = {"digest": "0x" + "ab" * 32, "signature": "0x" + "cd" * 65,
+                                "kill_seq": "1", "position": position,
+                                "order_id": action.get("order_id", "0x" + "00" * 32)}
+        else:
+            reply["position"] = position
+        return reply
+
+    async def post(self, path, raw, timeout):
+        assert type(raw) is bytes and len(raw) <= 8192 and 0 < timeout <= 15
+        self.requests.append((path, raw))
+        value = json.loads(raw)
+        if path == "/v1/agent/context":
+            self.calls["context"] += 1
+            assert set(value) == {"schema", "chain_id", "settlement", "agent_public_key",
+                                  "challenge", "signature"}
+            assert value["schema"] == ts2.CONTEXT_REQUEST_SCHEMA
+            message = ts2.context_signing_bytes(ts2.PINS, value["agent_public_key"],
+                                                value["challenge"])
+            assert self.crypto.verify(value["signature"], message, self.signer.public_key)
+            self.signed.append(value["signature"])
+            reply = {"schema": ts2.CONTEXT_SCHEMA,
+                     "status": "operator_native_agent_context_not_final",
+                     "challenge": value["challenge"], "context": copy.deepcopy(self.context),
+                     "public_grant": copy.deepcopy(self.grant),
+                     "next_command_nonce": str(self.command_nonce + 1), "proof_backed": False,
+                     "l1_finality_verified": False, "public_release_go": False}
+            if self.context_edit:
+                self.context_edit(reply)
+            return body(reply)
+        if path == "/api/v1/info":
+            self.calls["info"] += 1
+            assert value == {"type": "native_market"}
+            return body(self.market)
+        request = ts2.request_copy(value, ts2.PINS, self.crypto)  # Exact signature check.
+        digest = ts2.request_sha256(request)
+        if path == "/v1/agent/admit":
+            self.calls["admit"] += 1
+            self.signed.append(request["signature"])
+            if self.refusal:
+                status, reply = self.refusal(request)
+                if status is None:
+                    raise AgentError("unavailable")  # A 503 or a transport error.
+                raise AdmitRefusal(status, reply)
+            duplicate = digest in self.journal
+            self.journal[digest] = request
+            if request["action"]["type"] in ts2.SECURITY:
+                self.command_nonce = max(self.command_nonce,
+                                         int(request["action"]["command_nonce"]))
+            if self.lost_reply:
+                raise AgentError("unavailable")  # Journaled, but the reply was lost.
+            reply = self.ack(request, digest, duplicate)
+            if self.ack_edit:
+                self.ack_edit(reply)
+            return body(reply)
+        assert path == "/v1/agent/recovery"
+        self.calls["recovery"] += 1
+        status = self.recovery_status or (
+            "operator_journaled" if digest in self.journal else "unknown")
+        reply = {"schema": ts2.RECOVERY_SCHEMA, "request_sha256": digest, "status": status,
+                 "action": request["action"]["type"], "lineage": "1", "retry_authorized": False,
+                 "proofVerified": False, "publicFinality": False, "publicReleaseGo": False}
+        if self.recovery_edit:
+            self.recovery_edit(reply)
+        return body(reply)
+
+    def client(self, directory, initialize=True, signer=None):
+        return NativeTestnetClient(policy=self.policy, grant=self.grant,
+                                   signer=signer or self.signer, transport=self,
+                                   approved_api_url=API,
+                                   custody_path=str(Path(directory).resolve() / "original.sqlite"),
+                                   initialize=initialize)
+
+    def expiry(self, lifetime=30_000):
+        return str(int(time.time() * 1000) + lifetime)
+
+    def order(self, **changes):
+        order = {"symbol": "BTCUSDC", "side": "BUY", "order_type": "LIMIT",
+                 "time_in_force": "GTC", "price": "79990", "quantity": "0.001",
+                 "reduce_only": False, "post_only": False, **changes}
+        return {"type": "place", "order": order}
+
+    def admitted(self):
+        return [json.loads(raw) for path, raw in self.requests if path == "/v1/agent/admit"]
 
 
 class NativeTestnetTests(unittest.IsolatedAsyncioTestCase):
-    async def test_native_place_uses_real_three_signatures_and_exact_v1_agent_routes(self):
-        fixture = NativeFixture()
-        fixture.policy["market_id"] = list(bytes.fromhex(fixture.crypto.digest(b"FairVenue.v2.market-id.v1\0BTCUSDC")[2:]))
-        pinned = policy_copy(fixture.policy, fixture.crypto)
-        fixture.context["session_scope"] = _scope(pinned, grant_copy(fixture.grant, pinned, fixture.crypto))
-        action = {"type": "place", "order": {"symbol": "BTCUSDC", "side": "BUY", "order_type": "LIMIT", "time_in_force": "IOC", "price": "60000.00", "quantity": "0.001", "reduce_only": False, "post_only": False}}
-        with tempfile.TemporaryDirectory(prefix="native-order-codec-") as directory:
-            # The published golden uses this explicitly public synthetic seed.
-            # It is never read from an installed user's credential or signer.
-            exported = {"schema": "fairvenue-native-testnet-agent-v1", "environment": "TESTNET", "settlement_mode": "mock_token_sp1_operator_beta", "chain_id": 421614, "settlement": native._NATIVE_SETTLEMENT, "mock_token": native._NATIVE_MOCK_TOKEN, "api_namespace": "/v1", "api_url": API, "agent_policy": fixture.policy, "public_grant": fixture.grant, "private_key_seed": "0x" + "42" * 32}
-            key_path = Path(directory).resolve() / "downloaded-synthetic-key.json"
-            key_path.write_text(json.dumps(exported))
-            key_path.chmod(0o600)
-            with patch.object(native, "HttpTransport", return_value=fixture):
-                client = NativeTestnetClient.from_credentials(str(key_path), policy=fixture.policy, approved_api_url=API, custody_path=str(Path(directory).resolve() / "original.sqlite"), initialize=True)
-            try:
-                result = await client.run({**fixture.input, "action": action})
-                self.assertEqual(result["recovery"]["status"], "accepted")
-                self.assertEqual(fixture.calls["prepare"], 1)
-                self.assertEqual(fixture.calls["admit"], 1)
-                self.assertEqual(fixture.recovery_calls, 1)
-                self.assertFalse(client.has_pending_request())
-            finally:
-                client.close()
+    async def asyncSetUp(self):
+        self.fixture = NativeFixture()
+        self.directory = tempfile.mkdtemp(prefix="ts2-native-fixture-")
+        os.chmod(self.directory, 0o700)
+        self.client = self.fixture.client(self.directory)
 
-    async def test_explicit_native_context_three_signatures_and_original_only_completion(self):
-        fixture=NativeFixture()
-        with tempfile.TemporaryDirectory(prefix="native-testnet-fixture-") as directory:
-            client=fixture.client(directory)
-            try:
-                snapshot=await client.snapshot()
-                self.assertEqual(snapshot["next_nonce"],"1")
-                snapshot["context"]["owner"]="foreign"
-                result=await client.run(fixture.input)
-                self.assertEqual(result["ack"]["outcome"],"trade")
-                self.assertEqual(result["recovery"]["status"],"accepted")
-                self.assertFalse(client.has_pending_request())
-                self.assertEqual(fixture.calls["admit"],1)
-                self.assertEqual(fixture.recovery_calls,1)
-                self.assertNotIn("private_key",Path(directory,"original.sqlite").read_bytes().decode("latin1"))
-                with self.assertRaises(AgentError) as caught:
-                    await client.run(fixture.input)
-                self.assertEqual(caught.exception.code,"nonce_reused")
-            finally:
-                client.close()
-
-    async def test_lost_ack_retained_across_restart_recovery_never_resends(self):
-        fixture=NativeFixture();fixture.lost_reply=True
-        with tempfile.TemporaryDirectory(prefix="native-testnet-fixture-") as directory:
-            client=fixture.client(directory)
-            with self.assertRaises(AgentError) as caught:
-                await client.run(fixture.input)
-            self.assertEqual(caught.exception.code,"outcome_unknown")
-            self.assertTrue(client.has_pending_request())
-            retained=client._custody.read()[2]
-            self.assertEqual(set(retained),{"schema","request","protocol_time_ms"})
-            self.assertNotIn("session_scope",json.dumps(retained))
-            client.close()
-            restored=fixture.client(directory,False)
-            try:
-                self.assertEqual(restored._custody.read()[2],retained)
-                result=await restored.recover_original()
-                self.assertEqual(result["status"],"accepted")
-                self.assertFalse(restored.has_pending_request())
-                self.assertEqual(fixture.calls["admit"],1)
-            finally:
-                restored.close()
-
-    async def test_unresolved_wrong_hash_wrong_step_or_proof_cannot_clear_original(self):
-        edits=(lambda v:v.update(request_sha256="0x"+"1"*64),lambda v:v.update(step=9),
-               lambda v:v.update(retry_authorized=True),lambda v:v.update(proof_backed=True),
-               lambda v:v.update(status="final"),lambda v:v.update(private_key="forbidden"))
-        for edit in (None,*edits):
-            fixture=NativeFixture();fixture.lost_reply=True
-            with tempfile.TemporaryDirectory(prefix="native-testnet-fixture-") as directory:
-                client=fixture.client(directory)
-                try:
-                    with self.assertRaises(AgentError):
-                        await client.run(fixture.input)
-                    original=copy.deepcopy(client._custody.read()[2])
-                    fixture.recovery_status="unresolved";fixture.recovery_edit=edit
-                    if edit:
-                        with self.assertRaises(AgentError):
-                            await client.recover_original()
-                    else:
-                        self.assertEqual((await client.recover_original())["status"],"unresolved")
-                    self.assertEqual(client._custody.read()[2],original)
-                    with self.assertRaises(AgentError):
-                        await client.run({**fixture.input,"nonce":"2"})
-                    self.assertEqual(fixture.calls["admit"],1)
-                finally:
-                    client.close()
-
-    async def test_terminal_not_admitted_or_voided_clears_original_and_frees_its_nonce(self):
-        def voided(opening,**changes):
-            batch={"batch":opening["batch"],"generation":opening["generation"],
-                   "replacement_generation":opening["generation"]+1,
-                   "replacement_transaction":"0x"+"5"*64,"reason":"dead","settled":False,"re_executed":False}
-            return lambda v:v.update(settlement="not_settled",voided_batch={**batch,**changes})
-        # `opening_failed` names the failed original when one was signed, else
-        # an explicit null; `dead` always names the adopted replacement.
-        for status,changes in (("not_admitted",None),("not_settled",{}),
-                               ("not_settled",{"reason":"opening_failed"}),
-                               ("not_settled",{"reason":"opening_failed","replacement_transaction":None})):
-            fixture=NativeFixture();fixture.lost_reply=True
-            head=copy.deepcopy(fixture.context["prefix"]["head"])
-            with tempfile.TemporaryDirectory(prefix="native-testnet-fixture-") as directory:
-                client=fixture.client(directory)
-                try:
-                    with self.assertRaises(AgentError):
-                        await client.run(fixture.input)
-                    # The server never admitted it (or voided it): no native effect.
-                    fixture.context["prefix"]["head"]=head;fixture.next_nonce="1"
-                    opening=client._custody.read()[2]["request"]["intent"]["expected"]["opening"]
-                    fixture.recovery_status=status
-                    fixture.recovery_edit=voided(opening,**changes) if status=="not_settled" else None
-                    self.assertEqual((await client.recover_original())["status"],status)
-                    self.assertFalse(client.has_pending_request())
-                    self.assertEqual(client._custody.read()[1],0)
-                    # Nothing was consumed natively: the same nonce is signed afresh.
-                    fixture.recovery_status="accepted";fixture.recovery_edit=None
-                    self.assertEqual((await client.run(fixture.input))["recovery"]["status"],"accepted")
-                    self.assertEqual(fixture.calls["admit"],2)
-                finally:
-                    client.close()
-
-    async def test_foreign_or_settled_voided_binding_cannot_clear_original(self):
-        for changes in ({"batch":9},{"generation":9},{"replacement_generation":0},{"settled":True},
-                        {"re_executed":True},{"replacement_transaction":"0x"+"0"*64},
-                        {"replacement_transaction":"0x5"},
-                        # An adopted replacement always names its transaction.
-                        {"replacement_transaction":None},
-                        {"reason":"wrong_root","replacement_transaction":None},
-                        # `opening_failed`: a nonzero hash or null, nothing else.
-                        {"reason":"opening_failed","replacement_transaction":"0x"+"0"*64},
-                        {"reason":"opening_failed","replacement_transaction":0},
-                        # Empty voids are `not_admitted`, never a voided binding.
-                        {"reason":"expired_empty","replacement_transaction":None},
-                        {"reason":"dropped_empty"},{"reason":"operator"}):
-            fixture=NativeFixture();fixture.lost_reply=True
-            with tempfile.TemporaryDirectory(prefix="native-testnet-fixture-") as directory:
-                client=fixture.client(directory)
-                try:
-                    with self.assertRaises(AgentError):
-                        await client.run(fixture.input)
-                    original=copy.deepcopy(client._custody.read()[2])
-                    opening=original["request"]["intent"]["expected"]["opening"]
-                    batch={"batch":opening["batch"],"generation":opening["generation"],
-                           "replacement_generation":opening["generation"]+1,
-                           "replacement_transaction":"0x"+"5"*64,"reason":"dead","settled":False,"re_executed":False}
-                    fixture.recovery_status="not_settled"
-                    fixture.recovery_edit=lambda v:v.update(settlement="not_settled",voided_batch={**batch,**changes})
-                    with self.assertRaises(AgentError):
-                        await client.recover_original()
-                    self.assertEqual(client._custody.read()[2],original)
-                    # A voided binding never accompanies another status.
-                    fixture.recovery_status="not_admitted"
-                    fixture.recovery_edit=lambda v:v.update(settlement="not_settled",voided_batch=batch)
-                    with self.assertRaises(AgentError):
-                        await client.recover_original()
-                    self.assertEqual(client._custody.read()[2],original)
-                finally:
-                    client.close()
-
-    async def test_voided_binding_numbers_are_exact_integers_before_any_nonce_reset(self):
-        # Values that merely compare equal in Python (bool, float) are not the
-        # Rust/browser integers; the retained original, its custody `highest`
-        # and the in-memory nonce floor stay untouched until the exact binding
-        # validated, and only then roll back with the voided lineage.
-        def lookalike(opening):
-            yield {"batch":float(opening["batch"])}
-            yield {"generation":float(opening["generation"])}
-            yield {"replacement_generation":float(opening["generation"]+1)}
-            yield {"replacement_generation":True}
-            yield {"batch":str(opening["batch"])}
-            yield {"reason":["dead"]}
-            yield {"replacement_transaction":["0x"+"5"*64]}
-            for key in ("batch","generation"):
-                if opening[key] in (0,1):
-                    yield {key:bool(opening[key])}
-        fixture=NativeFixture();fixture.lost_reply=True
-        with tempfile.TemporaryDirectory(prefix="native-testnet-fixture-") as directory:
-            client=fixture.client(directory)
-            try:
-                with self.assertRaises(AgentError):
-                    await client.run(fixture.input)
-                revision,_,original=client._custody.read()
-                client._custody.change(revision,5,original)
-                client._nonce_floor=7
-                opening=original["request"]["intent"]["expected"]["opening"]
-                batch={"batch":opening["batch"],"generation":opening["generation"],
-                       "replacement_generation":opening["generation"]+1,
-                       "replacement_transaction":"0x"+"5"*64,"reason":"dead","settled":False,"re_executed":False}
-                fixture.recovery_status="not_settled"
-                for changes in lookalike(opening):
-                    fixture.recovery_edit=lambda v,c=changes:v.update(settlement="not_settled",voided_batch={**batch,**c})
-                    with self.assertRaises(AgentError):
-                        await client.recover_original()
-                    self.assertEqual(client._custody.read()[1:],(5,original))
-                    self.assertEqual(client._nonce_floor,7)
-                fixture.recovery_edit=lambda v:v.update(settlement="not_settled",voided_batch=batch)
-                self.assertEqual((await client.recover_original())["status"],"not_settled")
-                self.assertEqual(client._custody.read()[1:],(0,None))
-                self.assertEqual(client._nonce_floor,0)
-            finally:
-                client.close()
-
-    async def test_tampered_prepare_context_and_grant_refuse_before_dispatch(self):
-        for edit in (lambda f:setattr(f,"prepare_edit",lambda v:v.update(ordinary_signing_hash="0x"+"1"*64)),
-                     lambda f:setattr(f,"edit",lambda v:v.update(challenge="0x"+"1"*64)),
-                     lambda f:setattr(f,"edit",lambda v:v["public_grant"].update(canWithdraw=True))):
-            fixture=NativeFixture();edit(fixture)
-            with tempfile.TemporaryDirectory(prefix="native-testnet-fixture-") as directory:
-                client=fixture.client(directory)
-                try:
-                    with self.assertRaises(AgentError):
-                        await client.run(fixture.input)
-                    self.assertFalse(client.has_pending_request())
-                    self.assertEqual(fixture.calls["admit"],0)
-                finally:
-                    client.close()
-
-    async def test_definitive_not_placed_clears_original_without_consuming_its_nonce(self):
-        for reason in NOT_PLACED:
-            with self.subTest(reason=reason):
-                fixture=NativeFixture()
-                fixture.refusal=lambda request,r=reason:(refusal_status(r),not_placed(request,r))
-                with tempfile.TemporaryDirectory(prefix="native-testnet-fixture-") as directory:
-                    client=fixture.client(directory)
-                    try:
-                        with self.assertRaises(AgentError) as caught:
-                            await client.run(fixture.input)
-                        self.assertEqual(caught.exception.code,reason)
-                        self.assertFalse(client.has_pending_request())
-                        # Not consumed: `highest` stays, the same nonce signs afresh.
-                        self.assertEqual(client._custody.read()[1:],(0,None))
-                        self.assertEqual((fixture.refused,fixture.calls["admit"],fixture.recovery_calls),(1,0,0))
-                        fixture.refusal=None
-                        self.assertEqual((await client.run(fixture.input))["recovery"]["status"],"accepted")
-                        self.assertEqual(fixture.calls["admit"],1)
-                    finally:
-                        client.close()
-
-    async def test_mismatched_malformed_or_generic_refusal_retains_original(self):
-        generic=json.dumps({"error":"operator beta participant request unavailable or invalid",
-                            "proof_backed":False,"public_release_go":False}).encode()
-        cases=(lambda q:(409,not_placed(q,"batch_closed",request_sha256="0x"+"1"*64)),
-               lambda q:(409,not_placed({**q,"intent_signature":"0x"+"2"*128},"batch_closed")),
-               lambda q:(409,not_placed(q,"batch_closed",
-                                        request_sha256="0x"+hashlib.sha256(jcs(q).encode()).hexdigest().upper())),
-               lambda q:(409,not_placed(q,"batch_closed",extra=True)),
-               lambda q:(409,not_placed(q,"batch_closed",retry="later")),
-               lambda q:(409,not_placed(q,"admission_closed",retry="resign")),
-               lambda q:(409,not_placed(q,"rate_limited")),
-               lambda q:(429,not_placed(q,"batch_closed")),
-               lambda q:(409,not_placed(q,"slot_moved",retry="resign")),
-               lambda q:(409,not_placed(q,"batch_closed",error="outcome_unknown")),
-               lambda q:(409,not_placed(q,"batch_closed",proof_backed=True)),
-               lambda q:(409,not_placed(q,"batch_closed",l1_finality_verified=0)),
-               lambda q:(409,b"not json"),
-               lambda q:(409,generic),lambda q:(429,generic),
-               lambda q:(None,None))  # 503, timeout or transport failure
-        for index,case in enumerate(cases):
-            with self.subTest(case=index):
-                fixture=NativeFixture();fixture.refusal=case
-                with tempfile.TemporaryDirectory(prefix="native-testnet-fixture-") as directory:
-                    client=fixture.client(directory)
-                    try:
-                        with self.assertRaises(AgentError) as caught:
-                            await client.run(fixture.input)
-                        self.assertEqual(caught.exception.code,"outcome_unknown")
-                        self.assertTrue(client.has_pending_request())
-                        retained=client._custody.read()[2]
-                        self.assertEqual(retained["request"]["intent"]["nonce"],fixture.input["nonce"])
-                        self.assertEqual(fixture.recovery_calls,0)
-                        # Retained: no new action until recover_original resolves it.
-                        with self.assertRaises(AgentError) as again:
-                            await client.run({**fixture.input,"nonce":"2"})
-                        self.assertEqual(again.exception.code,"outcome_unknown")
-                        self.assertEqual(client._custody.read()[2],retained)
-                    finally:
-                        client.close()
-
-    async def test_transport_surfaces_only_admit_409_429_json_bodies(self):
-        import http.server
-        import threading
-        replies={}
-        class Handler(http.server.BaseHTTPRequestHandler):
-            def do_POST(self):
-                self.rfile.read(int(self.headers["Content-Length"]))
-                status,kind,body=replies[self.path]
-                self.send_response(status)
-                self.send_header("Content-Type",kind)
-                self.send_header("Content-Length",str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-            def log_message(self,*_):
-                pass
-        server=http.server.ThreadingHTTPServer(("127.0.0.1",0),Handler)
-        thread=threading.Thread(target=server.serve_forever,daemon=True)
-        thread.start()
+    async def asyncTearDown(self):
         try:
-            transport=HttpTransport(f"http://127.0.0.1:{server.server_address[1]}")
-            body=b'{"error":"not_placed"}'
-            for status in (409,429):
-                replies["/v1/agent/admit"]=(status,"application/json",body)
-                with self.assertRaises(AdmitRefusal) as caught:
-                    await transport.post("/v1/agent/admit",b"{}",5)
-                self.assertEqual((caught.exception.status,caught.exception.body,caught.exception.code),
-                                 (status,body,"outcome_unknown"))
-            for path,reply in (("/v1/agent/admit",(503,"application/json",body)),
-                               ("/v1/agent/admit",(409,"text/plain",body)),
-                               ("/v1/agent/admit",(400,"application/json",body)),
-                               ("/v1/agent/prepare",(409,"application/json",body))):
-                replies[path]=reply
-                with self.assertRaises(AgentError) as caught:
-                    await transport.post(path,b"{}",5)
-                self.assertNotIsInstance(caught.exception,AdmitRefusal)
-                self.assertEqual(caught.exception.code,"unavailable")
-            replies["/v1/agent/admit"]=(200,"application/json",b'{"ok":true}')
-            self.assertEqual(await transport.post("/v1/agent/admit",b"{}",5),b'{"ok":true}')
+            self.client.close()
+        except AgentError:
+            pass
+        for name in os.listdir(self.directory):
+            os.unlink(os.path.join(self.directory, name))
+        os.rmdir(self.directory)
+
+    async def run_action(self, action, **changes):
+        snapshot = await self.client.snapshot()
+        return await self.client.run({"nonce": snapshot["next_nonce"],
+                                      "expiresAtMs": self.fixture.expiry(), "action": action,
+                                      **changes})
+
+    async def test_signed_context_is_read_only_and_bound_to_this_key(self):
+        snapshot = await self.client.snapshot()
+        self.assertEqual(snapshot["next_nonce"], "1")
+        self.assertEqual(snapshot["context"]["fee_mode"], 0)
+        self.assertEqual(snapshot["context"]["admission"], {"open": True, "reasons": []})
+        self.assertEqual(snapshot["public_grant"], self.fixture.grant)
+        self.assertEqual(self.fixture.calls["admit"], 0)
+        for edit in (lambda r: r.update(challenge="0x" + "11" * 32),
+                     lambda r: r["public_grant"]["material"].update(nonce="2"),
+                     lambda r: r["context"].update(config_hash="0x" + "11" * 32),
+                     lambda r: r["context"].update(account_key="0x" + "00" * 31 + "08"),
+                     lambda r: r["context"].update(fee_mode=2),
+                     lambda r: r["context"]["admission"].update(open=False),
+                     lambda r: r.update(proof_backed=True),
+                     lambda r: r.update(private_key_seed=SEED)):
+            self.fixture.context_edit = edit
+            with self.assertRaises(AgentError) as caught:
+                await self.client.snapshot()
+            self.assertEqual(caught.exception.code, "response_invalid")
+
+    async def test_limit_order_signs_once_and_its_original_resolves_by_exact_lookup(self):
+        result = await self.run_action(self.fixture.order(price="79990.1", quantity="0.002"))
+        ack, recovery = result["ack"], result["recovery"]
+        self.assertEqual(recovery["status"], "accepted")
+        self.assertEqual(recovery["wire_status"], "operator_journaled")
+        self.assertFalse(self.client.has_pending_request())
+        admitted = self.fixture.admitted()
+        self.assertEqual(len(admitted), 1)
+        action = admitted[0]["action"]
+        self.assertEqual((action["limit_price_ticks"], action["quantity_lots"]), ("799901", "2"))
+        self.assertEqual((action["side"], action["kind"], action["time_in_force"]), (0, 0, 0))
+        self.assertEqual(action["fee_mode"], 0)
+        self.assertEqual(action["delegation_nonce"], self.fixture.grant["material"]["nonce"])
+        _, order_id = ts2.signing_message(ts2.PINS, ACCOUNT_KEY, self.fixture.signer.public_key,
+                                          action, self.fixture.crypto)
+        self.assertEqual(ack["order_id"], order_id)
+        self.assertEqual(ack["request_sha256"], ts2.request_sha256(admitted[0]))
+        self.assertEqual(self.fixture.calls, {"context": 2, "info": 1, "admit": 1, "recovery": 1})
+        self.assertNotIn(SEED[2:], Path(self.directory, "original.sqlite").read_bytes().hex())
+        # Market rules are cached: the next order needs no second public read.
+        await self.run_action(self.fixture.order(side="SELL", price="80010"))
+        self.assertEqual(self.fixture.calls["info"], 1)
+        # Each order gets its own random client nonce, so equal orders never collide.
+        first, second = (await self.run_action(self.fixture.order()),
+                         await self.run_action(self.fixture.order()))
+        self.assertNotEqual(first["ack"]["order_id"], second["ack"]["order_id"])
+        self.assertFalse(second["ack"]["duplicate"])
+
+    async def test_off_tick_off_lot_and_unsupported_actions_refuse_before_signing(self):
+        cases = [
+            (self.fixture.order(price="79990.05"), "invalid_order"),
+            (self.fixture.order(quantity="0.0015"), "invalid_order"),
+            (self.fixture.order(price="1e5"), "invalid_order"),
+            (self.fixture.order(order_type="MARKET", time_in_force="GTC", price=None), "invalid_order"),
+            (self.fixture.order(post_only=True, time_in_force="IOC"), "invalid_order"),
+            (self.fixture.order(price=None), "invalid_order"),
+            ({"type": "modify", "order_id": "1", "replacement": {}}, "unsupported"),
+            ({"type": "cancel", "order_id": "42"}, "invalid_input"),
+            ({"type": "leverage", "leverage": "101"}, "invalid_input"),
+            ({"type": "fee_mode", "mode": "MAKER"}, "invalid_input"),
+        ]
+        for action, code in cases:
+            with self.subTest(action=action), self.assertRaises(AgentError) as caught:
+                await self.run_action(action)
+            self.assertEqual(caught.exception.code, code)
+        self.assertIn("Cancel the order and place a new one",
+                      str(AgentError("unsupported")))
+        self.assertEqual(self.fixture.calls["admit"], 0)
+        self.assertFalse(self.client.has_pending_request())
+
+    async def test_market_orders_sign_a_half_percent_bound_away_from_the_book(self):
+        await self.run_action(self.fixture.order(order_type="MARKET", time_in_force="IOC",
+                                                 price=None))
+        await self.run_action(self.fixture.order(order_type="MARKET", time_in_force="FOK",
+                                                 side="SELL", price=None))
+        await self.run_action(self.fixture.order(order_type="MARKET", time_in_force="IOC",
+                                                 price="80400.01"))
+        buy, sell, chosen = (request["action"] for request in self.fixture.admitted())
+        # Best ask 80000.2 * 1.005 = 80400.201 -> up to 80400.3. Best bid
+        # 79999.9 * 0.995 = 79599.9005 -> down to 79599.9. A chosen bound rounds up.
+        self.assertEqual((buy["kind"], buy["time_in_force"], buy["limit_price_ticks"]),
+                         (1, 1, "804003"))
+        self.assertEqual((sell["side"], sell["time_in_force"], sell["limit_price_ticks"]),
+                         (1, 2, "795999"))
+        self.assertEqual(chosen["limit_price_ticks"], "804001")
+        # A computed bound reads fresh best prices. A chosen bound needs only the tick.
+        self.assertEqual(self.fixture.calls["info"], 2)
+        self.fixture.market = market(self.fixture, asks=[])
+        with self.assertRaises(AgentError) as caught:
+            await self.run_action(self.fixture.order(order_type="MARKET", time_in_force="IOC",
+                                                     price=None))
+        self.assertEqual(caught.exception.code, "invalid_order")
+
+    async def test_cancel_kill_all_and_security_commands_use_their_exact_wire(self):
+        order_id = "0x" + "aa" * 32
+        await self.run_action({"type": "cancel", "order_id": order_id})
+        await self.run_action({"type": "kill_all"})
+        for action in ({"type": "leverage", "leverage": "100"},
+                       {"type": "fee_mode", "mode": "PNL"},
+                       {"type": "dead_man_switch", "deadline_ms": self.fixture.expiry(5_000)},
+                       {"type": "dead_man_switch", "deadline_ms": "0"}):
+            result = await self.run_action(action)
+            self.assertEqual(result["recovery"]["status"], "accepted")
+        cancel, kill, leverage, fee, dms, disarm = (r["action"] for r in self.fixture.admitted())
+        self.assertEqual(cancel, {"type": "cancel", "order_id": order_id})
+        self.assertEqual(set(kill), {"type", "client_nonce"})
+        self.assertEqual((leverage["type"], leverage["leverage"], leverage["command_nonce"]),
+                         ("set_leverage", "100", "1"))
+        self.assertEqual((fee["type"], fee["fee_mode"], fee["command_nonce"]), ("set_fee_mode", 1, "2"))
+        self.assertEqual((dms["type"], dms["command_nonce"]), ("set_dms", "3"))
+        self.assertEqual((disarm["deadline_ms"], disarm["command_nonce"]), ("0", "4"))
+        self.assertEqual((await self.client.snapshot())["next_nonce"], "5")
+
+    async def test_a_signed_security_nonce_is_never_signed_again(self):
+        self.fixture.refusal = lambda request: (409, not_placed(request, "rejected"))
+        with self.assertRaises(AgentError) as caught:
+            await self.run_action({"type": "leverage", "leverage": "5"})
+        self.assertEqual(caught.exception.code, "rejected")
+        self.assertFalse(self.client.has_pending_request())
+        # The server still offers nonce 1, but this key already signed it once.
+        snapshot = await self.client.snapshot()
+        self.assertEqual((snapshot["next_command_nonce"], snapshot["next_nonce"]), ("1", "2"))
+        with self.assertRaises(AgentError) as caught:
+            await self.client.run({"nonce": "1", "expiresAtMs": self.fixture.expiry(),
+                                   "action": {"type": "leverage", "leverage": "5"}})
+        self.assertEqual(caught.exception.code, "nonce_reused")
+        self.assertEqual(self.fixture.calls["admit"], 1)
+
+    async def test_account_settings_switched_off_are_refused_before_signing(self):
+        self.fixture.context["account_settings_enabled"] = False
+        for action in ({"type": "leverage", "leverage": "5"}, {"type": "fee_mode", "mode": "PNL"}):
+            with self.assertRaises(AgentError) as caught:
+                await self.run_action(action)
+            self.assertEqual(caught.exception.code, "admission_closed")
+        await self.run_action({"type": "kill_all"})  # Other commands are unaffected.
+        self.assertEqual(self.fixture.calls["admit"], 1)
+        del self.fixture.context["account_settings_enabled"]  # Older replies omit the flag.
+        await self.run_action({"type": "leverage", "leverage": "5"})
+
+    async def test_expiry_and_nonce_are_checked_before_anything_is_signed(self):
+        grant_expiry = int(self.fixture.grant["material"]["expires_at_ms"])
+        for expires in ("1", str(grant_expiry + 1)):
+            with self.assertRaises(AgentError) as caught:
+                await self.client.run({"nonce": "1", "expiresAtMs": expires,
+                                       "action": self.fixture.order()})
+            self.assertEqual(caught.exception.code, "context_changed")
+        with self.assertRaises(AgentError) as caught:
+            await self.client.run({"nonce": "2", "expiresAtMs": self.fixture.expiry(),
+                                   "action": self.fixture.order()})
+        self.assertEqual(caught.exception.code, "nonce_reused")
+        self.assertEqual(self.fixture.calls["admit"], 0)
+        # Only the signed context reads reached the server.
+        self.assertEqual(len(self.fixture.signed), self.fixture.calls["context"])
+
+    async def test_lost_reply_is_retained_across_restart_and_never_resent(self):
+        self.fixture.lost_reply = True
+        with self.assertRaises(AgentError) as caught:
+            await self.run_action(self.fixture.order())
+        self.assertEqual(caught.exception.code, "outcome_unknown")
+        self.assertTrue(self.client.has_pending_request())
+        retained = self.client._custody.read()[2]
+        self.assertEqual(set(retained), {"schema", "request"})
+        self.assertEqual(retained["request"], self.fixture.admitted()[0])
+        with self.assertRaises(AgentError) as caught:
+            await self.run_action(self.fixture.order())
+        self.assertEqual(caught.exception.code, "outcome_unknown")
+        self.client.close()
+        self.client = self.fixture.client(self.directory, initialize=False)
+        self.assertEqual(self.client._custody.read()[2], retained)
+        result = await self.client.recover_original()
+        self.assertEqual((result["status"], result["action"]), ("accepted", "order"))
+        self.assertFalse(self.client.has_pending_request())
+        self.assertEqual(self.fixture.calls["admit"], 1)
+        with self.assertRaises(AgentError) as caught:
+            await self.client.recover_original()
+        self.assertEqual(caught.exception.code, "no_pending_request")
+
+    async def test_unknown_or_unbound_recovery_replies_never_clear_the_original(self):
+        self.fixture.refusal = lambda request: (None, None)  # 503: nothing journaled.
+        with self.assertRaises(AgentError):
+            await self.run_action(self.fixture.order())
+        original = copy.deepcopy(self.client._custody.read()[2])
+        self.assertIsNotNone(original)
+        edits = (None, lambda r: r.update(request_sha256="0x" + "11" * 32),
+                 lambda r: r.update(retry_authorized=True), lambda r: r.update(proofVerified=True),
+                 lambda r: r.update(status="final"), lambda r: r.update(action="cancel"),
+                 lambda r: r.update(proof_backed=False), lambda r: r.update(private_key_seed=SEED))
+        for edit in edits:
+            self.fixture.recovery_edit = edit
+            with self.subTest(edit=edit):
+                if edit is None:
+                    self.assertEqual((await self.client.recover_original())["status"], "unresolved")
+                else:
+                    with self.assertRaises(AgentError):
+                        await self.client.recover_original()
+                self.assertEqual(self.client._custody.read()[2], original)
+        self.assertEqual(self.fixture.calls["admit"], 1)
+
+    async def test_terminal_lookups_clear_exactly_the_original(self):
+        for status, outcome in (("not_placed", "rejected"), ("not_settled", "not_settled"),
+                                ("operator_journaled", "accepted")):
+            self.fixture.lost_reply = True
+            with self.assertRaises(AgentError):
+                await self.run_action(self.fixture.order())
+            self.fixture.lost_reply = False
+            self.fixture.recovery_status = status
+            result = await self.client.recover_original()
+            self.assertEqual((result["status"], result["wire_status"]), (outcome, status))
+            self.assertFalse(self.client.has_pending_request())
+            self.fixture.recovery_status = None
+
+    async def test_definitive_not_placed_refusals_clear_only_their_exact_original(self):
+        for reason in ts2.NOT_PLACED:
+            self.fixture.refusal = lambda request, reason=reason: (
+                refusal_status(reason), not_placed(request, reason))
+            with self.subTest(reason=reason), self.assertRaises(AgentError) as caught:
+                await self.run_action(self.fixture.order())
+            self.assertEqual(caught.exception.code, reason)
+            self.assertFalse(self.client.has_pending_request())
+        bad = [
+            lambda r: (409, not_placed(r, "rate_limited")),
+            lambda r: (429, not_placed(r, "rejected")),
+            lambda r: (409, not_placed(r, "rejected", request_sha256="0x" + "11" * 32)),
+            lambda r: (409, not_placed(r, "rejected", retry="later")),
+            lambda r: (409, not_placed(r, "batch_closed")),
+            lambda r: (409, not_placed(r, "rejected", proof_backed=True)),
+            lambda r: (409, b"not json"),
+        ]
+        for index, refusal in enumerate(bad):
+            self.fixture.refusal = refusal
+            with self.subTest(case=index), self.assertRaises(AgentError) as caught:
+                await self.run_action(self.fixture.order())
+            self.assertEqual(caught.exception.code, "outcome_unknown")
+            self.assertTrue(self.client.has_pending_request())
+            self.fixture.refusal, self.fixture.recovery_status = None, "not_placed"
+            self.assertEqual((await self.client.recover_original())["status"], "rejected")
+            self.fixture.recovery_status = None
+
+    async def test_an_unbound_ack_is_an_unknown_outcome(self):
+        for edit in (lambda r: r.update(order_id="0x" + "11" * 32),
+                     lambda r: r.update(request_sha256="0x" + "11" * 32),
+                     lambda r: r.update(config_hash="0x" + "11" * 32),
+                     lambda r: r.update(status="settled"), lambda r: r.update(publicFinality=True),
+                     lambda r: r.pop("held")):
+            self.fixture.ack_edit = edit
+            with self.subTest(edit=edit), self.assertRaises(AgentError) as caught:
+                await self.run_action(self.fixture.order())
+            self.assertEqual(caught.exception.code, "outcome_unknown")
+            self.assertTrue(self.client.has_pending_request())
+            self.fixture.ack_edit = None
+            self.assertEqual((await self.client.recover_original())["status"], "accepted")
+
+    async def test_custody_is_never_reinitialized_or_adopted_by_another_key(self):
+        await self.run_action({"type": "kill_all"})
+        self.client.close()
+        with self.assertRaises(AgentError) as caught:
+            self.fixture.client(self.directory, initialize=True)
+        self.assertEqual(caught.exception.code, "unavailable")
+        other = NativeFixture(seed="0x" + "4d" * 32, nonce="2")
+        with self.assertRaises(AgentError):
+            other.client(self.directory, initialize=False)
+        missing = tempfile.mkdtemp(prefix="ts2-native-missing-")
+        try:
+            os.chmod(missing, 0o700)
+            with self.assertRaises(AgentError):
+                self.fixture.client(missing, initialize=False)
+            self.assertFalse(Path(missing, "original.sqlite").exists())
         finally:
-            await asyncio.to_thread(server.shutdown);server.server_close()
+            os.rmdir(missing)
+        self.client = self.fixture.client(self.directory, initialize=False)
+        with self.assertRaises(AgentError) as caught:
+            self.fixture.client(self.directory, initialize=False)  # Same signer object.
+        self.assertEqual(caught.exception.code, "busy")
 
-    async def test_timeout_keeps_live_callback_fence_and_public_original(self):
-        fixture=NativeFixture()
-        started,release=asyncio.Event(),asyncio.Event()
-        async def pause():
-            started.set();await release.wait()
-        fixture.admit_pause=pause
-        with tempfile.TemporaryDirectory(prefix="native-testnet-fixture-") as directory:
-            client=fixture.client(directory)
-            with self.assertRaises(AgentError):
-                await client.run(fixture.input,timeout_ms=100)
-            self.assertTrue(started.is_set())
-            self.assertTrue(client.has_pending_request())
-            with self.assertRaises(AgentError) as caught:
-                await client.recover_original()
-            self.assertEqual(caught.exception.code,"busy")
-            with self.assertRaises(AgentError):
-                client.close()
-            release.set();await asyncio.sleep(0.02)
-            self.assertEqual((await client.recover_original())["status"],"accepted")
-            client.close()
-
-    async def test_existing_strict_factories_stay_closed_before_io(self):
-        fixture=NativeFixture()
-        strict=AgentClient(policy=fixture.policy,grant=fixture.grant,signer=fixture.signer,
-                           current_context=fixture.current_context,transport=fixture)
-        context=BotContextProvider(policy=fixture.policy,grant=fixture.grant,signer=fixture.signer,transport=fixture)
-        for callback in (lambda:strict.run(fixture.input),strict.retry_admission,context.snapshot):
-            with self.assertRaises(AgentError) as caught:
-                await callback()
-            self.assertEqual(caught.exception.code,"activation_closed")
-        self.assertEqual(fixture.signed,[])
-
-
-class NativeCustodyTests(unittest.TestCase):
-    def test_actual_downloaded_testnet_loader_constructs_without_http_or_private_export(self):
-        from test_native_credentials import fixture, write
-        policy, exported=fixture()
-        with tempfile.TemporaryDirectory(prefix="native-testnet-key-") as key_directory, tempfile.TemporaryDirectory(prefix="native-testnet-fixture-") as directory:
-            key_path=write(key_directory,exported)
-            with patch("fairvenue_schema6.transport._http",side_effect=AssertionError("no I/O on construction")):
-                client=NativeTestnetClient.from_credentials(key_path,policy=policy,approved_api_url=API,
-                        custody_path=str(Path(directory).resolve()/"original.sqlite"),initialize=True)
+    async def test_from_credentials_refuses_v4_keys_and_signs_with_the_downloaded_key(self):
+        fixture = self.fixture
+        key_dir = os.path.realpath(tempfile.mkdtemp(prefix="ts2-native-key-"))
+        try:
+            os.chmod(key_dir, 0o700)
+            path = Path(key_dir, "fairvenue-TESTNET-agent.json")
+            path.write_text(json.dumps(fixture.export()))
+            path.chmod(0o600)
+            continuity = Path(key_dir, "continuity")
+            continuity.mkdir(mode=0o700)
+            self.client.close()
+            with patch.object(native, "HttpTransport", return_value=fixture):
+                client = NativeTestnetClient.from_credentials(
+                    str(path), policy=fixture.policy, approved_api_url=API,
+                    custody_path=str(continuity / "original.sqlite"), initialize=True)
             try:
-                self.assertFalse(client.has_pending_request())
-                self.assertNotIn(exported["private_key_seed"],repr(client))
-                self.assertNotIn(exported["private_key_seed"].encode(),Path(directory,"original.sqlite").read_bytes())
-                self.assertEqual(Path(key_path).read_bytes(),json.dumps(exported,separators=(",",":")).encode())
+                snapshot = await client.snapshot()
+                result = await client.run({"nonce": snapshot["next_nonce"],
+                                           "expiresAtMs": fixture.expiry(),
+                                           "action": fixture.order()})
+                self.assertEqual(result["recovery"]["status"], "accepted")
             finally:
                 client.close()
+            v4 = Path(key_dir, "fairvenue-v4.json")
+            v4.write_text(json.dumps({"schema": ts2.V4_KEY_SCHEMA, "private_key_seed": SEED}))
+            v4.chmod(0o600)
+            with self.assertRaises(AgentError) as caught:
+                NativeTestnetClient.from_credentials(
+                    str(v4), policy=fixture.policy, approved_api_url=API,
+                    custody_path=str(continuity / "other.sqlite"), initialize=True)
+            self.assertEqual(str(caught.exception), "TS2: create a new bot key.")
+        finally:
+            for root, directories, files in os.walk(key_dir, topdown=False):
+                for name in files:
+                    os.unlink(os.path.join(root, name))
+                for name in directories:
+                    os.rmdir(os.path.join(root, name))
+            os.rmdir(key_dir)
+        self.client = fixture.client(self.directory, initialize=False)
 
-    def test_private_existing_config_lock_and_unknown_namespace_no_reset(self):
-        fixture=NativeFixture()
-        with tempfile.TemporaryDirectory(prefix="native-testnet-fixture-") as directory:
-            client=fixture.client(directory)
-            with self.assertRaises(AgentError):
-                fixture.client(directory,True)
-            with self.assertRaises(AgentError):
-                fixture.client(directory,False)
-            client.close()
-            path=Path(directory,"original.sqlite")
-            before=path.read_bytes()
-            os.chmod(path,0o644)
-            with self.assertRaises(AgentError):
-                fixture.client(directory,False)
-            self.assertEqual(path.read_bytes(),before)
-            os.chmod(path,0o600)
-            connection=sqlite3.connect(path)
-            connection.execute("UPDATE original SET config=?",(b"x"*32,));connection.commit();connection.close()
-            foreign=path.read_bytes()
-            with self.assertRaises(AgentError):
-                fixture.client(directory,False)
-            self.assertEqual(path.read_bytes(),foreign)
-        with tempfile.TemporaryDirectory(prefix="native-testnet-fixture-") as missing:
-            with self.assertRaises(AgentError):
-                fixture.client(missing,False)
-            self.assertFalse(Path(missing,"original.sqlite").exists())
 
-    def test_production_wrong_deployment_or_unapproved_url_refuse_without_io(self):
-        for edit in (lambda f:f.policy["domain"].update(chain_id=1),
-                     lambda f:f.policy["domain"].update(settlement=[9]*20),
-                     lambda f:f.grant.update(canWithdraw=True)):
-            fixture=NativeFixture();edit(fixture)
-            with tempfile.TemporaryDirectory(prefix="native-testnet-fixture-") as directory:
-                with self.assertRaises(AgentError):
-                    fixture.client(directory)
-                self.assertFalse(Path(directory,"original.sqlite").exists())
-        with self.assertRaises(AgentError):
-            NativeTestnetClient.from_credentials("/not/a/key",policy={},approved_api_url="http://bad.example/",
-                                                custody_path="/unused")
+class TransportPathTests(unittest.IsolatedAsyncioTestCase):
+    async def test_only_agent_paths_and_the_public_market_read(self):
+        transport = HttpTransport("https://native-testnet.example")
+        for path in ("/api/v1/exchange", "/v1/onboarding/account", "/api/v1/info?x=1"):
+            with self.subTest(path=path), self.assertRaises(AgentError):
+                await transport.post(path, b"{}", 5)
+        from fairvenue_schema6 import transport as module
+
+        self.assertEqual(module._limit("/api/v1/info"), 131072)
+        self.assertEqual(module._limit("/v1/agent/admit"), 16384)
+        self.assertIn("/api/v1/info", module._PATHS)
+
+
+if __name__ == "__main__":
+    unittest.main()

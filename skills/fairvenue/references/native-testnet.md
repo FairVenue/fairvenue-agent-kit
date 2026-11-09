@@ -1,9 +1,13 @@
-# Native TESTNET agent setup
+# Native TESTNET agent setup (TS2)
 
 Use this branch only after the operator approves the exact native API installation. This is
 custodial, operator-administered Arbitrum Sepolia TESTNET with mock USDC, not production funds or
-independently verified L1 finality. A packaged policy is not proof of live access or release GO.
+independently verified L1 finality. A packaged pin file is not proof of live access or release GO.
 Never select this branch just because `app.fairvenue.xyz` resolves or a server says to trust it.
+
+The testnet now runs the TS2 settlement. Bot keys and grants from the earlier V4 testnet never
+become TS2 authority. A V4 key file (`fairvenue-native-testnet-agent-v1`) is refused with
+"TS2: create a new bot key". Ask the user to create a new key. Never edit or convert an old one.
 
 With the `fairvenue` MCP server connected, its tools run every step below for you: pins,
 private key import, continuity, signed context, orders and recovery. See [mcp.md](mcp.md). The
@@ -18,14 +22,14 @@ for genuine native funding, click **Create API key & download JSON**, then say d
 a dedicated browser-generated Ed25519 bot key, not the terminal UI key. No MetaMask is needed for
 managed TESTNET users. Google/session cookies never authorize bot requests.
 
-Help find the download and copy it without overwriting any existing file to an owner-only,
-git-excluded path. The key file must be `0400` or `0600`; ask for its path, never its contents.
-Do not print, upload, paste, screenshot or load its seed into model context. The SDK reads it
-locally. Lost private keys remain lost. A V0/schema-less key is not accepted; create a fresh
-native credential rather than translating it. Do not create accounts/keys or orders automatically
-just because the skill was installed.
+The download is a `fairvenue-ts2-testnet-agent-v1` file. Help find it and copy it, without
+overwriting any existing file, to an owner-only, git-excluded path. The key file must be `0400`
+or `0600`. Ask for its path, never its contents. Do not print, upload, paste, screenshot or load
+its seed into model context. The SDK reads it locally. Lost private keys remain lost. A V0, V4 or
+schema-less key is not accepted. Create a fresh TS2 key rather than translating it. Do not create
+accounts, keys or orders automatically just because the skill was installed.
 
-## Install the exact SDK and independent public policy
+## Install the exact SDK and independent public pins
 
 Clone `https://github.com/FairVenue/fairvenue-agent-kit`, detach at the operator-reviewed commit
 containing `experimental/native-testnet`, use Python 3.11+ and install that directory:
@@ -40,29 +44,29 @@ python -m pip install ./experimental/native-testnet
 ```
 
 `REVIEWED_COMMIT` must be supplied and checked, not replaced by `main` or an invented pin. Installing
-the root `fairvenue` package gives the old V0 client; native imports `fairvenue_schema6`.
+the root `fairvenue` package gives the old V0 client. Native bots import `fairvenue_schema6`.
 No same-named PyPI package is approved.
 
-The public policy artifact is
-`experimental/native-testnet/fairvenue_schema6/deployments/arbitrum-sepolia-1k.json` at that
+The public pin artifact is
+`experimental/native-testnet/fairvenue_schema6/deployments/arbitrum-sepolia-ts2.json` at that
 reviewed commit. Its SHA256 is
-`9a39af143e67f4675f05998bedbafb02a052819d23a2129674db8f8588938d4d`.
+`8a7cb56d98859cfb6e69b2416e4ae7eb3974a6a1012867bb7b1b205a2d1ab169`.
 Have the operator approve that exact artifact and HTTPS API origin independently of the agent
-credential/API response. Copy it to a fresh owner-private file, without overwriting an established
-installation. The loader checks its held FD, hash, deployment, policy and origin before any HTTP.
-Never calculate a new expected hash to accept an unexplained replacement file.
+credential and any API response. Copy it to a fresh owner-private file, without overwriting an
+established installation. The loader checks its held FD, hash, deployment and origin before any
+HTTP. Never calculate a new expected hash to accept an unexplained replacement file.
 
-It binds chain `421614`, settlement `0xaaebec860fc2ec7f77379ac3c4b892266a76bcbf`, mock token
-`0x2b62f3c0663d9590113e24ec588018bcb81a7d29`, exact gateway public keys and `/v1`. These are
-TESTNET pins, not wallet keys. A different deployment needs separately reviewed pins, not a
-caller-selected server/policy from the credential.
+It binds chain `421614`, TS2 settlement `0x3beb98f3ab27d3ac9595e28a3ca03e016fb2745b`, config hash
+`0x6a72cb1998229bcd0d5ce8ea8bbeb0d6c294ee51a385f08208fe3439b58d8d91` and the `/v1` agent
+endpoints. These are TESTNET pins, not wallet keys. A different deployment needs separately
+reviewed pins and a new kit release, never a caller-selected server or pins from the credential.
 
 ## First connection: signed context, NO order
 
 Create a dedicated private `0700` continuity directory separate from credentials, installation
 pins and any other strategy. It must survive restart. Only the very first install uses
-`initialize=True`; use `False` thereafter. Do not recreate a missing established namespace.
-Adapt paths only; keep the independently approved SHA256:
+`initialize=True`. Use `False` thereafter. Do not recreate a missing established namespace.
+Adapt paths only. Keep the independently approved SHA256:
 
 ```python
 import asyncio
@@ -73,7 +77,7 @@ from fairvenue_schema6 import NativeTestnetClient, load_native_testnet_installat
 async def no_order_dry_run():
     installed = load_native_testnet_installation(
         "/private/native-installation.json",
-        expected_sha256="9a39af143e67f4675f05998bedbafb02a052819d23a2129674db8f8588938d4d",
+        expected_sha256="8a7cb56d98859cfb6e69b2416e4ae7eb3974a6a1012867bb7b1b205a2d1ab169",
     )
     client = NativeTestnetClient.from_credentials(
         "/private/downloaded-testnet-agent.json",
@@ -83,7 +87,7 @@ async def no_order_dry_run():
         initialize=True,  # FIRST install only. False on every restart.
     )
     try:
-        await client.snapshot()  # Ed25519-signed context only; no prepare/admit/order.
+        await client.snapshot()  # Ed25519-signed agent context only. No admit, no order.
         print("Native TESTNET context verified. No order submitted.")
     finally:
         client.close()
@@ -92,48 +96,64 @@ async def no_order_dry_run():
 asyncio.run(no_order_dry_run())
 ```
 
-Unavailable/expired/revoked context is a recoverable setup failure, not permission to use V0,
-change policy/nonce, rotate a key, reset custody or repeat funding. Report a bounded error code,
-not a context object, grant, signed request or traceback containing upstream data.
+An unavailable, expired, revoked or foreign context is a recoverable setup failure, not permission
+to use V0 or V4, change pins, rotate a key, reset custody or repeat funding. Report a bounded error
+code, not a context object, grant, signed request or traceback containing upstream data.
 
 ## Authorized trading and exact-original recovery
 
-Before any trade agree on size, price/slippage protection and strategy scope. `snapshot()` gives
-the actual next nonce/current native prefix; no numeric account ID or market_id0 is used.
-`run({"nonce": "...", "expiresAtMs": "...", "action": {...}})` uses the existing native codec:
-signed context -> intent prepare -> locally verified ordinary and generation signables -> durable
-exact public original -> one admit. It does not translate a V0 JCS envelope.
+Before any trade agree on size, price or slippage protection and strategy scope. `snapshot()`
+returns the signed TS2 context (account fee mode, leverage, open batch, admission) and
+`next_nonce`, the next account command nonce. No numeric account ID or market_id0 is used.
+`run({"nonce": snapshot["next_nonce"], "expiresAtMs": "...", "action": {...}})` signs one TS2
+request locally with one Ed25519 signature over its exact native bytes, retains that public
+original durably and sends one admit. It does not translate a V0 or V4 envelope.
 
-Use the package's native `place` action with exact decimal strings, a limit price and supported
-time-in-force (`GTC` or price-protected `IOC`), `post_only` for makers, `reduce_only` for closes.
-Use native `cancel`/`modify`/`fee_mode`/`leverage`/`dead_man_switch` only with separately authorized
-scope. Read the reviewed package protocol rather than inventing a Binance-shaped action.
-Accepted/rejected is native soft execution, not necessarily a fill, SP1 proof or L1 finality.
-Check actual fills and their original batch proof links separately. On the pipelined deployment
-trading continues while earlier batches prove; admission can still close for a while (reported as
-`admission_closed`). Do not loosen TTL/FairLag to make a request pass.
+Actions keep their shape:
+
+- `place` with an `order` of `symbol`, `side`, `order_type`, `time_in_force`, `price`,
+  `quantity`, `reduce_only` and `post_only`. Price and quantity are exact decimal strings that must
+  be whole ticks and whole lots of the public market (`tick_size` and `step_size` from
+  `native_market`). Off-grid input raises `invalid_order` before anything is signed. Nothing is
+  rounded. Use `LIMIT` with `GTC` (resting, `post_only` for makers) or a price-protected `IOC`, and
+  `reduce_only` for closes. A `MARKET` order (`IOC` or `FOK`) signs a protection bound: its price
+  rounded away from the book, or 0.5% beyond the best opposite price when the price is `None`.
+  `expiresAtMs` is the order's lifetime: up to 23 hours for `GTC`, about 30 seconds for one-shot
+  orders, never past the key's expiry. Every order carries the account's fee mode.
+- `cancel` with the 0x `order_id` from the order's ACK (`result["ack"]["order_id"]`).
+- `kill_all` cancels every resting and FairLag-held order of the account at once.
+- `fee_mode` (`FIXED` or `PNL`), `leverage` (`"1"` to `"100"`) and `dead_man_switch` are account
+  commands with one strictly increasing nonce per account and key. The operator can keep fee mode
+  and leverage closed (`admission_closed`).
+- `modify` raises `unsupported`: cancel and place a new order.
+
+Use these only with separately authorized scope. Read the reviewed package protocol rather than
+inventing a Binance-shaped action. An ACK is the operator journal's soft answer, not a fill, SP1
+proof or L1 finality. Matching follows after FairLag. Check actual fills and their settlement
+separately. TS2 admits into the open batch continuously while earlier batches settle, but
+admission can still close for a while (reported as `admission_closed`). Do not loosen expiry or
+FairLag to make a request pass.
 
 A failed `run()` has two kinds of error. An `AgentError` whose `code` is a `not_placed` reason is
-definitive: the server refused before any durable effect, the SDK already cleared the retained
-original and its nonce was not used. Build a fresh request from a new `snapshot()`:
-`batch_closed` or `stale_context` (the batch moved on; submit again at once), `nonce_stale`,
-`intent_expired`, `bad_signature`, `unknown_agent` or `invalid_request` (fix the cause first),
-`rate_limited` (back off, then retry) and `admission_closed` (trading paused; retry later). No
-other code means "not placed".
+definitive: the server refused before any durable effect and the SDK already cleared the retained
+original. Build a fresh request from a new `snapshot()`. The reasons are `rejected` (the exchange
+refused it, for example margin or a post-only order that would cross), `invalid_request` (fix the
+cause first), `rate_limited` (back off, then retry) and `admission_closed` (trading or settings
+paused, retry later). No other code means "not placed".
 
 After `outcome_unknown` (timeout, 5xx or an unverifiable reply), preserve the same private
-continuity database and call `recover_original()`. It performs only `/v1/agent/recovery` for the
-exact retained signed original; it never sends admit again. `accepted`/`rejected` clear it, as do
-the terminal `not_admitted` (its batch closed without it) and `not_settled` (its batch was voided;
-it never executes); after those two, build a new request. `unresolved`/`bound_incomplete`, changed
-hash/step or corrupt custody remain blocked. Nonce advancement/time/new Opening is not evidence.
-Never reset, reprice, retime, resign or resend the original. Each strategy/process needs a
-dedicated key/custody.
+continuity database and call `recover_original()`. It performs only `/v1/agent/recovery` with the
+exact retained signed original. It never sends admit again. `accepted` (journaled), `rejected`
+(journaled native rejection) and `not_settled` (its batch was voided, it never takes effect) clear
+it. After those, build a new request if it is still wanted. `unresolved` or corrupt custody remain
+blocked. Elapsed time or a new batch is not evidence. Never reset, reprice, retime, resign or
+resend the original. Each strategy or process needs a dedicated key and custody.
 
-Bot routes are `/v1/agent/context`, `/prepare`, `/admit`, `/recovery`, under the fixed approved
-origin. Public reads use `/api/v1/info` with `{"type":"native_market"}`; SOFT book/reference prices
-are not chain freshness, proof or external liquidity. Do not use V0 WebSockets/market_id0 or
-Google cookies/bearer tokens for native bots. This client has no funding/withdrawal/wallet signer.
+Bot routes are `/v1/agent/context`, `/prepare`, `/admit` and `/recovery`, under the fixed approved
+origin. Public reads use `/api/v1/info` with `{"type":"native_market"}`. Its SOFT book and reference
+prices are not chain freshness, proof or external liquidity. Do not use V0 WebSockets, market_id0
+or Google cookies and bearer tokens for native bots. This client has no funding, withdrawal or
+wallet signer.
 
 Continue the shared skill's Progress continuity workflow after setup, without duplicate jobs or
 claiming that a dry run authorizes trading, funding or release.

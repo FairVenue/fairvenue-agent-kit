@@ -20,6 +20,15 @@ if __name__ != "__main__":
 # Worker exit status of a bounded JSON admit refusal body (validated by the
 # client, never trusted here); 0 is an ordinary 200 reply, anything else fails.
 _REFUSALS = {409: 2, 429: 3}
+# The only paths: the agent endpoints and the public market read, which needs
+# the TS2 tick and lot sizes. No cookie or key reaches any of them.
+_PATHS = ("/v1/agent/context", "/v1/agent/prepare", "/v1/agent/admit", "/v1/agent/recovery",
+          "/api/v1/info")
+
+
+def _limit(path):
+    """Largest accepted reply: a public market snapshot, else a 16 KiB agent reply."""
+    return 131072 if path == "/api/v1/info" else 16384
 
 
 def _http(origin, path, body, timeout):
@@ -50,19 +59,20 @@ def _http(origin, path, body, timeout):
             raise ValueError()
         chunks = []
         size = 0
-        for _ in range(128):
+        limit = _limit(path)
+        for _ in range(limit // 128):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise ValueError()
             if connection.sock is not None:
                 connection.sock.settimeout(remaining)
-            chunk = response.read1(min(2048, 16385 - size))
+            chunk = response.read1(min(2048, limit + 1 - size))
             if time.monotonic() >= deadline:
                 raise ValueError()
             if not chunk:
                 return status, b"".join(chunks)
             size += len(chunk)
-            if size > 16384:
+            if size > limit:
                 raise ValueError()
             chunks.append(chunk)
         raise ValueError()
@@ -107,7 +117,7 @@ class HttpTransport:
             raise AgentError() from None
 
     async def post(self, path, body, timeout):
-        if (path not in ("/v1/agent/context", "/v1/agent/prepare", "/v1/agent/admit", "/v1/agent/recovery")
+        if (path not in _PATHS
                 or type(body) is not bytes or len(body) > 8192
                 or type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 15):
             fail()
@@ -135,19 +145,21 @@ class HttpTransport:
             if len(request) > 16384:
                 fail()
 
+            limit = _limit(path)
+
             async def pipe_exchange():
                 process.stdin.write(request)
                 await process.stdin.drain()
                 process.stdin.close()
                 chunks = []
                 size = 0
-                for _ in range(128):
-                    chunk = await process.stdout.read(min(2048, 16385 - size))
+                for _ in range(limit // 128):
+                    chunk = await process.stdout.read(min(2048, limit + 1 - size))
                     if not chunk:
                         await process.wait()
                         return b"".join(chunks)
                     size += len(chunk)
-                    if size > 16384:
+                    if size > limit:
                         fail("response_invalid")
                     chunks.append(chunk)
                 fail("response_invalid")
@@ -159,7 +171,7 @@ class HttpTransport:
             result = exchange.result()
             if time.monotonic() >= deadline:
                 fail("deadline")
-            if type(result) is not bytes or len(result) > 16384:
+            if type(result) is not bytes or len(result) > limit:
                 fail("unavailable")
             refusal = {code: status for status, code in _REFUSALS.items()}.get(process.returncode)
             if refusal is not None and path == "/v1/agent/admit":
@@ -202,7 +214,7 @@ if __name__ == "__main__":
     try:
         request = json.loads(sys.stdin.buffer.read(16385))
         if (type(request) is not dict or set(request) != {"origin", "path", "body", "timeout"}
-                or request["path"] not in ("/v1/agent/context", "/v1/agent/prepare", "/v1/agent/admit", "/v1/agent/recovery")
+                or request["path"] not in _PATHS
                 or type(request["origin"]) is not str or len(request["origin"]) > 256
                 or type(request["timeout"]) not in (int, float)
                 or not math.isfinite(request["timeout"]) or not 0 < request["timeout"] <= 15):

@@ -24,8 +24,10 @@ exact-original recovery and the user's order limits. Keep the user's part to cli
 - Treat `outcome_unknown` and `blocked` as unresolved: call `recover_pending_request` and send
   nothing else, and don't switch keys, until it resolves. `not_placed`, `not_executed` and
   `failed` mean nothing happened.
-- Bot keys cannot read balances, positions, open orders or fills. Use `get_journal`, public
-  trades and the user's Arena terminal.
+- Bot keys cannot read balances, positions or fills here. Use `get_journal` (it keeps the
+  `order_id` of every order the server placed), public trades and the user's Arena terminal.
+- The testnet runs TS2. A bot key made before it is refused with "TS2: create a new bot key".
+  Then the user creates a new key, nothing else.
 
 **When the tools are missing, offer them.** Before any native TESTNET setup, offer to connect
 the FairVenue MCP tools. It is the recommended path: the user only clicks in the browser and in
@@ -40,8 +42,9 @@ trades around the clock.
 
 For the Bot Building Hackathon read [references/hackathon.md](references/hackathon.md).
 
-- **Native TESTNET:** an approved `fairvenue-native-testnet-agent-v1` credential and independently
-  installed deployment/API/policy pins. Read [references/native-testnet.md](references/native-testnet.md)
+- **Native TESTNET (TS2):** an approved `fairvenue-ts2-testnet-agent-v1` credential and
+  independently installed deployment/API pins. A V4 `fairvenue-native-testnet-agent-v1` file is
+  refused, never converted. Read [references/native-testnet.md](references/native-testnet.md)
   first and follow that flow, not the V0 transport below. It uses managed custodial Arbitrum
   Sepolia mock tokens, real native signatures and separate history, not production funds.
 - **Legacy V0 Arena:** explicitly approved virtual settlement with the original V0 credential.

@@ -56,14 +56,23 @@ SIGNED_ACTION = ToolAnnotations(
 
 Side = Annotated[Literal["BUY", "SELL"], Field(description="BUY or SELL.")]
 Quantity = Annotated[
-    str, Field(description='Size in BTC as a decimal string, for example "0.001".')
+    str,
+    Field(
+        description='Size in BTC as a decimal string, for example "0.001". Must be a whole '
+        "number of steps (step_size in get_market). It is never rounded."
+    ),
 ]
 Price = Annotated[
     str,
     Field(
         description='Limit price in test USDC as a decimal string, for example "80100.5". '
-        "IOC orders use it as their worst acceptable price."
+        "Must be on the tick (tick_size in get_market). It is never rounded. IOC orders use "
+        "it as their worst acceptable price."
     ),
+]
+OrderId = Annotated[
+    str,
+    Field(description="The 0x order ID that place_order returned or the Arena terminal shows."),
 ]
 TimeInForce = Annotated[
     Literal["GTC", "IOC"],
@@ -289,8 +298,9 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
     ) -> dict[str, Any]:
         """Native BTCUSDC book, mark, midpoint, spread, recent trades, fees and rules.
 
-        Public soft snapshot of the operator-run TESTNET, not proof-verified.
-        Includes tick and step sizes needed to price orders.
+        Public soft snapshot of the operator-run TS2 TESTNET, not proof-verified.
+        Includes the tick and step sizes every order must fit exactly, and whether
+        admission is open.
         """
         return await run(lambda t: t.market_snapshot(depth=depth, trades=trades))
 
@@ -347,11 +357,12 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
         """Sign and submit one LIMIT order for BTCUSDC with the active bot key.
 
         The first signed action of a session shows the user a one-click dialog to
-        allow trading. Rounds to tick and step, enforces the limits and refuses
-        prices far from the reference. Status: accepted or rejected (the engine
-        executed or refused it), not_placed, not_executed or failed (nothing
-        happened, a new request is safe), blocked (another request is pending)
-        or outcome_unknown (call recover_pending_request, never resend).
+        allow trading. Refuses prices off the tick and sizes off the step (nothing
+        is rounded), enforces the limits and refuses prices far from the reference.
+        A GTC order lives up to 23 hours. Status: accepted (journaled, with the
+        order_id that cancel_order takes) or rejected, not_placed, not_executed or
+        failed (nothing happened, a new request is safe), blocked (another request
+        is pending) or outcome_unknown (call recover_pending_request, never resend).
         """
         apply_consent(consent)
         return await run(
@@ -368,7 +379,7 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
 
     @server.tool(title="Modify order", annotations=SIGNED_ACTION)
     async def modify_order(
-        order_id: Annotated[str, Field(description="Order ID from the Arena terminal.")],
+        order_id: OrderId,
         side: Side,
         quantity: Quantity,
         price: Price,
@@ -378,7 +389,10 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
         reduce_only: ReduceOnly = False,
         dry_run: DryRun = False,
     ) -> dict[str, Any]:
-        """Atomically cancel one resting order and submit its replacement."""
+        """Not available on TS2: it always refuses and signs nothing.
+
+        Cancel the order with cancel_order and place a new one with place_order.
+        """
         apply_consent(consent)
         return await run(
             lambda t: t.modify(
@@ -395,11 +409,12 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
 
     @server.tool(title="Cancel order", annotations=SIGNED_ACTION)
     async def cancel_order(
-        order_id: Annotated[str, Field(description="Order ID from the Arena terminal.")],
+        order_id: OrderId,
         consent: Consent,
     ) -> dict[str, Any]:
-        """Cancel one resting order by ID. Bot keys cannot list order IDs: ask the
-        user to copy it from the Arena terminal, or use cancel_all_orders."""
+        """Cancel one order by its 0x order ID. place_order returns the ID of every
+        order this agent places. For other orders ask the user to copy the ID from
+        the Arena terminal, or use cancel_all_orders."""
         apply_consent(consent)
         return await run(lambda t: t.cancel(order_id=order_id))
 
@@ -407,18 +422,20 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
     async def cancel_all_orders(
         consent: Consent,
         within_seconds: Annotated[
-            int, Field(ge=2, le=600, description="Deadline from now, at least 2 seconds.")
+            int,
+            Field(
+                ge=2,
+                le=600,
+                description="Kept for compatibility. TS2 cancels at once, so it is not used.",
+            ),
         ] = 2,
     ) -> dict[str, Any]:
-        """Cancel every resting order of the account via the dead man's switch.
+        """Cancel every resting and FairLag-held order of the account at once (TS2 kill-all).
 
-        Takes effect at the first oracle observation after the deadline,
-        roughly 10 to 20 seconds. Replaces any earlier switch deadline.
+        Orders placed after it are not affected. It leaves the dead man's switch as it is.
         """
         apply_consent(consent)
-        return await run(
-            lambda t: t.dead_man_switch(seconds=within_seconds, purpose="cancel_all_orders")
-        )
+        return await run(lambda t: t.cancel_all())
 
     @server.tool(title="Dead man's switch", annotations=SIGNED_ACTION)
     async def set_dead_man_switch(
@@ -433,7 +450,10 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
         ],
         consent: Consent,
     ) -> dict[str, Any]:
-        """Arm, refresh or disarm the account's dead man's switch heartbeat."""
+        """Arm, refresh or disarm the account's dead man's switch heartbeat.
+
+        Right after the deadline every resting and FairLag-held order is cancelled.
+        """
         apply_consent(consent)
         return await run(
             lambda t: t.dead_man_switch(seconds=seconds, purpose="set_dead_man_switch")
@@ -441,10 +461,15 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
 
     @server.tool(title="Set leverage", annotations=SIGNED_ACTION)
     async def set_leverage(
-        leverage: Annotated[int, Field(ge=1, le=1000, description="Whole-number leverage.")],
+        leverage: Annotated[
+            int, Field(ge=1, le=100, description="Whole-number leverage, 1 to 100.")
+        ],
         consent: Consent,
     ) -> dict[str, Any]:
-        """Set the account's leverage. The engine refuses values it does not allow."""
+        """Set the account's leverage. A decrease needs no open orders or position.
+
+        The testnet may keep account settings closed (not_placed, admission_closed).
+        """
         apply_consent(consent)
         return await run(lambda t: t.leverage(leverage=leverage))
 
@@ -456,7 +481,11 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
         ],
         consent: Consent,
     ) -> dict[str, Any]:
-        """Switch the account's fee mode. Only allowed with no open orders or position."""
+        """Switch the account's fee mode. Only allowed with no open orders or position.
+
+        Every later order carries this mode. The testnet may keep account settings
+        closed (not_placed, admission_closed).
+        """
         apply_consent(consent)
         return await run(lambda t: t.fee_mode(mode=mode))
 
@@ -465,10 +494,10 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
         """Look up the outcome of a signed request whose result is unknown.
 
         Works for any key, including an expired one, and returns the original's
-        public action and nonce. Only queries the exact retained original and
-        never resends it. accepted, rejected, not_admitted and not_settled
-        resolve it. unresolved, bound_incomplete and still_unknown mean try again
-        later. nothing_pending means no request is waiting.
+        public action. Only queries the exact retained original and never resends
+        it. accepted, rejected and not_settled resolve it. unresolved and
+        still_unknown mean try again later. nothing_pending means no request is
+        waiting.
         """
         return await run(lambda t: t.recover())
 
@@ -480,7 +509,8 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
     ) -> dict[str, Any]:
         """This server's own submitted requests and outcomes, newest last.
 
-        The agent's memory: bot keys cannot read orders, fills or balances.
+        The agent's memory, including the order IDs of its orders. Bot keys cannot
+        read fills or balances through this server.
         """
         return await local(lambda t: {"entries": t.journal.tail(limit)})
 

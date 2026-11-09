@@ -1,4 +1,4 @@
-"""The FairVenue native TESTNET agent behind the MCP tools.
+"""The FairVenue TS2 native TESTNET agent behind the MCP tools.
 
 One process owns one agent key at a time: the SDK client holds that key's
 continuity lock, and every signed operation runs under one asyncio lock, so
@@ -23,11 +23,10 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
-from fairvenue_schema6 import AgentError, CryptoPrimitives, HttpTransport, NativeTestnetClient
-from fairvenue_schema6.protocol import NOT_PLACED, policy_copy
+from fairvenue_schema6 import AgentError, HttpTransport, NativeTestnetClient, ts2
 
 from . import __version__, profile
-from .config import Config, Limits
+from .config import LEGACY_V4_HOME, Config, Limits
 from .journal import Journal
 from .market import (
     SYMBOL,
@@ -44,21 +43,26 @@ from .market import (
 from .profile import SetupError
 from .public import PublicApi, PublicApiError
 
-#: The browser uses the same request window: min(context time + 30 s, key expiry).
-INTENT_LIFETIME_MS = 30_000
+#: Browser parity: a resting order lives up to 23 hours, an IOC order and an
+#: account command 30 seconds, never past the key's own expiry.
+GTC_LIFETIME_MS = 23 * 60 * 60 * 1000
+ONE_SHOT_LIFETIME_MS = 30_000
 MIN_DMS_DELAY_MS = 2_000
 MAX_DMS_DELAY_MS = 86_000_000
-PERMISSION = {"place": 1, "cancel": 2, "modify": 4, "dead_man_switch": 8}
+MAX_LEVERAGE = 100
+PERMISSION = {"place": ts2.TRADE, "cancel": ts2.CANCEL, "dead_man_switch": ts2.DEAD_MAN_SWITCH}
 _PROTOCOL_TIME = re.compile(r"[0-9]{1,16}")
+_ORDER_ID = re.compile(r"0x[0-9a-f]{64}")
 #: A key downloaded this recently, before the page was opened, is still picked up.
 RECENT_DOWNLOAD_SECONDS = 1_800
 #: The setup page is opened again only after this long without a download.
 REOPEN_PAGE_SECONDS = 600
 
 ACCOUNT_VISIBILITY = (
-    "Bot keys cannot read balances, positions, open orders or fills through the API. "
-    "Use get_journal for what this server submitted, get_market for public trades, "
-    "and ask the user to check the Arena terminal for balances and order IDs."
+    "Bot keys cannot read balances, positions or fills through this server. place_order "
+    "returns each order's order_id, which cancel_order takes. Use get_journal for what this "
+    "server submitted, get_market for public trades, and ask the user to check the Arena "
+    "terminal for balances and positions."
 )
 TRADING_FORCED_OFF = (
     "Trading is switched off in this MCP server's configuration (FAIRVENUE_TRADING=off). "
@@ -74,17 +78,20 @@ PENDING_GUIDANCE = (
     "A signed request has an unknown outcome. Call recover_pending_request before anything "
     "else, even if a key has expired. Never resend, reprice or resign it."
 )
+MODIFY_UNSUPPORTED = (
+    "Order changes are not available on TS2. Cancel the order with cancel_order and place a "
+    "new one. Nothing was signed."
+)
 
 NOT_PLACED_GUIDANCE = {
-    "batch_closed": "The batch moved on before admission. Nothing was placed. Submit again now.",
-    "stale_context": "The batch changed before admission. Nothing was placed. Submit again now.",
-    "nonce_stale": "The nonce was already used. Nothing was placed. Submit again.",
-    "intent_expired": "The request expired before admission. Nothing was placed. Submit again.",
-    "bad_signature": "The server refused the signature. Nothing was placed. Check the key.",
-    "unknown_agent": "This key is not, or no longer, authorized. Create a new API key.",
-    "invalid_request": "The server refused the request as invalid. Nothing was placed.",
+    "invalid_request": "The server refused the request as invalid. Nothing was placed. Check "
+    "that the key is the current TS2 bot key.",
+    "rejected": "The exchange refused it before it took effect. Nothing was placed. Typical "
+    "causes are margin, a post-only order that would cross, a reduce-only order with nothing "
+    "to reduce, or a fee mode or leverage change while orders or a position are open.",
+    "admission_closed": "Trading or account settings are paused right now. Nothing was "
+    "placed. Retry later.",
     "rate_limited": "Rate limited. Nothing was placed. Wait a few seconds, then retry.",
-    "admission_closed": "Trading is paused right now. Nothing was placed. Retry later.",
 }
 
 FAILURE_GUIDANCE = {
@@ -95,17 +102,19 @@ FAILURE_GUIDANCE = {
     "signature_invalid": "A local signature check failed.",
     "crypto_unavailable": profile.CRYPTO_PROBLEM,
     "invalid_input": "The SDK refused the request fields or the key lacks a permission.",
-    "nonce_reused": "The nonce moved. Nothing was placed. Submit again.",
+    "invalid_order": "The price or size does not fit the market tick or step size.",
+    "unsupported": MODIFY_UNSUPPORTED,
+    "v4_key": profile.NEW_KEY,
+    "previous_deployment": profile.PREVIOUS_DEPLOYMENT,
+    "nonce_reused": "The command nonce moved. Nothing was placed. Submit again.",
     "busy": "An earlier call on this key is still finishing. Retry in a few seconds.",
 }
 
 RECOVERY_MEANINGS = {
-    "accepted": "It executed (soft, operator-trusted). The original is cleared.",
-    "rejected": "The engine refused it. Nothing executed. The original is cleared.",
-    "not_admitted": "Its batch closed without it. Nothing executed and its nonce is free.",
-    "not_settled": "Its batch was voided. It never executes. The original is cleared.",
+    "accepted": "The exchange journaled it (soft, operator-trusted). The original is cleared.",
+    "rejected": "The exchange refused it. Nothing executed. The original is cleared.",
+    "not_settled": "Its batch was voided. It never takes effect. The original is cleared.",
     "unresolved": "Still unknown. The original stays retained. Check again later.",
-    "bound_incomplete": "Still settling. The original stays retained. Check again later.",
 }
 
 
@@ -115,7 +124,8 @@ class ToolProblem(Exception):
 
 ClientOpener = Callable[..., Any]
 PublicFactory = Callable[[str, str], PublicApi]
-Prepared = tuple[Callable[[int], dict[str, Any]], dict[str, Any]]
+#: (the action for a protocol time, its public summary, its lifetime in ms)
+Prepared = tuple[Callable[[int], dict[str, Any]], dict[str, Any], int]
 
 
 def default_opener(
@@ -184,16 +194,30 @@ def _decimal(value: str, name: str) -> Decimal:
 
 
 def _order_id(value: str) -> str:
-    text = value.strip()
-    if not text.isascii() or not text.isdigit() or text != str(int(text)):
-        raise ToolProblem("order_id must be the decimal order ID shown in the Arena terminal.")
-    if not 0 < int(text) <= (1 << 53) - 1:
-        raise ToolProblem("order_id must be the decimal order ID shown in the Arena terminal.")
+    text = value.strip().lower()
+    if _ORDER_ID.fullmatch(text) is None or int(text, 16) == 0:
+        raise ToolProblem(
+            "order_id must be the 0x order ID (64 hex characters) that place_order returned "
+            "or the Arena terminal shows."
+        )
     return text
 
 
+def _now_ms(context: dict[str, Any]) -> int:
+    """This machine's clock, never behind the server's last protocol time."""
+    return max(int(time.time() * 1000), int(context["protocol_time_ms"]))
+
+
 def _pending_view(item: dict[str, Any]) -> dict[str, Any]:
-    keys = ("agent_public_key", "nonce", "batch", "expires_at", "action", "unreadable", "custody")
+    keys = (
+        "agent_public_key",
+        "action",
+        "nonce",
+        "expires_at",
+        "request_sha256",
+        "unreadable",
+        "custody",
+    )
     return {key: item[key] for key in keys if key in item}
 
 
@@ -201,6 +225,7 @@ def _pending_view(item: dict[str, Any]) -> dict[str, Any]:
 class OrderPlan:
     wire: dict[str, Any]
     view: dict[str, Any]
+    lifetime_ms: int
 
 
 class Trader:
@@ -258,26 +283,26 @@ class Trader:
             )
         return None
 
-    def _public_api(self) -> tuple[PublicApi, str, dict[str, Any] | None]:
-        """Public reads use the installed pins, or the packaged ones before setup."""
+    def _public_api(self) -> tuple[PublicApi, str, str | None]:
+        """Public reads use the installed pins, or the packaged ones before setup.
+
+        Returns the API, the settlement and the installed config hash (None before setup).
+        """
         try:
             installed = profile.load_installation(self.config)
-            api_url, policy = installed.api_url, installed.policy
+            api_url, settlement = installed.api_url, installed.settlement
+            config_hash: str | None = installed.config_hash
         except SetupError:
             pins = json.loads(profile.packaged_installation())
-            api_url, policy = pins["api_url"], None
-        settlement = (
-            "0x" + bytes(policy["domain"]["settlement"]).hex()
-            if policy is not None
-            else json.loads(profile.packaged_installation())["settlement"]
-        )
+            api_url, settlement, config_hash = pins["api_url"], pins["settlement"], None
         if self._public is None or self._public[1] != api_url:
             self._public = (self._public_factory(api_url, settlement), api_url, settlement)
-        return self._public[0], settlement, policy
+        return self._public[0], settlement, config_hash
 
     def _open_key(self, installed: Any, signer: Any, grant: dict[str, Any], path: Path) -> Any:
         """The SDK client for one key, opening (or first initializing) its continuity."""
-        identity = f"{path}:{grant['agentPublicKey']}:{grant['delegationNonce']}"
+        material = grant["material"]
+        identity = f"{path}:{material['agent_public_key']}:{material['nonce']}"
         if self._client is not None and self._client_key == identity:
             return self._client
         self._release()
@@ -308,7 +333,7 @@ class Trader:
         if initialize:
             self._journal(
                 "continuity_initialized",
-                {"agent_public_key": grant["agentPublicKey"], "path": str(custody)},
+                {"agent_public_key": material["agent_public_key"], "path": str(custody)},
             )
         return client
 
@@ -324,7 +349,8 @@ class Trader:
         if not waiting and client is not None:
             try:
                 if client.has_pending_request():
-                    waiting = [{"agent_public_key": (self._grant or {}).get("agentPublicKey")}]
+                    material = (self._grant or {}).get("material") or {}
+                    waiting = [{"agent_public_key": material.get("agent_public_key")}]
             except AgentError:
                 waiting = [{"unreadable": True}]
         return waiting
@@ -380,9 +406,17 @@ class Trader:
         steps: list[str] = []
         status: dict[str, Any] = {
             "server": f"fairvenue-mcp {__version__}",
+            "protocol": "TS2",
             "home": str(self.config.home),
             "trading": self.limits_view(),
         }
+        legacy = Path(os.path.expanduser(LEGACY_V4_HOME))
+        if legacy != self.config.home and legacy.is_dir():
+            status["previous_testnet_profile"] = {
+                "path": str(legacy),
+                "note": "The retired V4 testnet profile is kept untouched. Its keys cannot sign "
+                "on TS2 and its requests cannot be recovered here. Create a new bot key.",
+            }
         try:
             waiting = profile.pending_originals(self.config)
         except SetupError as problem:
@@ -497,7 +531,8 @@ class Trader:
                 "browser_opened": opened,
                 "say_to_user": f"{where} Sign in with Google if asked, then click Create API key "
                 "& download JSON. The button turns on once your 1,000 test USDC have arrived. I "
-                "pick the key up automatically from your Downloads folder.",
+                "pick the key up automatically from your Downloads folder. Keys from before the "
+                "TS2 upgrade no longer work, so create a new one.",
                 "next": "Call connect_account again to keep waiting. If the user saved the file "
                 "elsewhere, use find_agent_key_downloads with that folder, then import_agent_key.",
             }
@@ -553,18 +588,22 @@ class Trader:
                     + FAILURE_GUIDANCE.get(error.code, error.code)
                 ) from None
             waiting = self._waiting(client)
-        context, grant = snapshot["context"], snapshot["public_grant"]
-        prefix = context["prefix"]
+        context, material = snapshot["context"], snapshot["public_grant"]["material"]
         result = {
             "status": "connected",
+            "protocol": "TS2",
             "note": "Signed native context read only. No order was submitted.",
-            "owner": grant["owner"],
-            "agent_public_key": grant["agentPublicKey"],
-            "key_expires_at": utc(int(grant["expiresAtMs"])),
+            "owner": material["owner"],
+            "agent_public_key": material["agent_public_key"],
+            "key_expires_at": utc(int(material["expires_at_ms"])),
             "protocol_time": utc(int(context["protocol_time_ms"])),
-            "batch": str(prefix["opening"]["batch"]),
-            "step": prefix["head"]["count"],
-            "next_nonce": snapshot["next_nonce"],
+            "batch": context["batch_number"],
+            "lineage": context["lineage"],
+            "fee_mode": "PNL" if context["fee_mode"] == 1 else "FIXED",
+            "leverage": context["leverage"],
+            "account_settings_enabled": context["account_settings_enabled"],
+            "admission": context["admission"],
+            "next_command_nonce": snapshot["next_nonce"],
             "pending_request": pending,
             "trading": self.limits_view(),
             "account_visibility": ACCOUNT_VISIBILITY,
@@ -583,26 +622,19 @@ class Trader:
         except (PublicApiError, MarketDataError) as problem:
             raise ToolProblem(str(problem)) from None
 
-    def _policy_matches(self, market: Market) -> bool | None:
-        _, _, policy = self._public_api()
-        if policy is None:
-            return None
-        try:
-            crypto = CryptoPrimitives()
-            served = policy_copy(market.native_policy, crypto)["commitment"]
-            return bool(served == policy_copy(policy, crypto)["commitment"])
-        except AgentError:
-            return False
+    def _pins_match(self, market: Market) -> bool | None:
+        _, _, config_hash = self._public_api()
+        return None if config_hash is None else market.config_hash == config_hash
 
     async def market_snapshot(self, *, depth: int, trades: int) -> dict[str, Any]:
         market = await self.market()
         view = market_view(market, depth=depth, trades=trades)
-        matches = self._policy_matches(market)
+        matches = self._pins_match(market)
         view["matches_installed_pins"] = matches
         if matches is False:
             view["warning"] = (
-                "The served market policy differs from the installed pins. The deployment may "
-                "have changed (for example a new testnet season). Do not trade until reviewed."
+                "The served config hash differs from the installed TS2 pins. The deployment may "
+                "have changed. Signed requests would be refused. Update the kit before trading."
             )
         return view
 
@@ -669,25 +701,28 @@ class Trader:
             raise ToolProblem("side must be BUY or SELL.")
         if time_in_force not in ("GTC", "IOC"):
             raise ToolProblem(
-                "time_in_force must be GTC or IOC. There are no market or FOK orders: use a "
+                "time_in_force must be GTC or IOC. There are no market or FOK orders here: use a "
                 "price-protected IOC limit order to take liquidity."
             )
         if post_only and time_in_force != "GTC":
             raise ToolProblem("post_only orders must be GTC so they can rest on the book.")
-        requested_quantity, requested_price = (
-            _decimal(quantity, "quantity"),
-            _decimal(price, "price"),
-        )
-        size = round_to_step(requested_quantity, market.step_size, up=False)
-        limit = round_to_step(requested_price, market.tick_size, up=side == "SELL")
-        if size <= 0:
-            raise ToolProblem(f"quantity is below the step size {fmt(market.step_size)} BTC.")
-        adjustments = []
-        if size != requested_quantity:
-            adjustments.append(f"quantity rounded down to the {fmt(market.step_size)} step")
-        if limit != requested_price:
-            direction = "up" if side == "SELL" else "down"
-            adjustments.append(f"price rounded {direction} to the {fmt(market.tick_size)} tick")
+        size, limit = _decimal(quantity, "quantity"), _decimal(price, "price")
+        tick, step = market.tick_size, market.step_size
+        # TS2 signs whole ticks and steps. Nothing is rounded: off-grid input is refused.
+        if size < step:
+            raise ToolProblem(f"quantity is below the step size {fmt(step)} BTC.")
+        if size % step:
+            raise ToolProblem(
+                f"quantity {fmt(size)} is not a whole number of {fmt(step)} BTC steps. Use "
+                f"{fmt(round_to_step(size, step, up=False))} or "
+                f"{fmt(round_to_step(size, step, up=True))}. Nothing was signed."
+            )
+        if limit % tick:
+            raise ToolProblem(
+                f"price {fmt(limit)} is not on the {fmt(tick)} tick. Use "
+                f"{fmt(round_to_step(limit, tick, up=False))} or "
+                f"{fmt(round_to_step(limit, tick, up=True))}. Nothing was signed."
+            )
         limits = self.limits
         notional = size * limit
         if size > limits.max_order_quantity:
@@ -732,15 +767,20 @@ class Trader:
             "reduce_only": reduce_only,
             "post_only": post_only,
         }
+        lifetime = GTC_LIFETIME_MS if time_in_force == "GTC" else ONE_SHOT_LIFETIME_MS
         view = {
             **wire,
+            "price_ticks": str(int(limit / tick)),
+            "quantity_steps": str(int(size / step)),
             "notional_usdc": fmt(notional),
             "reference_price": fmt(reference),
             "deviation_bps": fmt(deviation.quantize(Decimal("0.01"))),
             "fairlag_ms": str(market.fairlag_ms),
-            "adjustments": adjustments,
+            "expires_after": "23 hours unless cancelled or filled"
+            if time_in_force == "GTC"
+            else "30 seconds",
         }
-        return OrderPlan(wire, view)
+        return OrderPlan(wire, view, lifetime)
 
     async def place(self, *, dry_run: bool, **order: Any) -> dict[str, Any]:
         if dry_run:
@@ -750,35 +790,41 @@ class Trader:
         async def prepare() -> Prepared:
             # Planned inside the signing lock, against a market read taken just now.
             plan = self.plan_order(await self.market(), **order)
-            return (lambda _: {"type": "place", "order": plan.wire}), plan.view
+            return (lambda _: {"type": "place", "order": plan.wire}), plan.view, plan.lifetime_ms
 
         return await self._submit("place_order", "place", prepare)
 
     async def modify(self, *, order_id: str, dry_run: bool, **order: Any) -> dict[str, Any]:
-        identifier = _order_id(order_id)
-        if dry_run:
-            plan = self.plan_order(await self.market(), **order)
-            return {
-                "status": "dry_run",
-                "signed": False,
-                "order_id": identifier,
-                "replacement": plan.view,
-            }
-
-        async def prepare() -> Prepared:
-            plan = self.plan_order(await self.market(), **order)
-            action = {"type": "modify", "order_id": identifier, "replacement": plan.wire}
-            return (lambda _: action), {"order_id": identifier, "replacement": plan.view}
-
-        return await self._submit("modify_order", "modify", prepare)
+        """TS2 has no order modify. Nothing is signed, also not for a dry run."""
+        raise ToolProblem(MODIFY_UNSUPPORTED)
 
     async def cancel(self, *, order_id: str) -> dict[str, Any]:
         identifier = _order_id(order_id)
 
         async def prepare() -> Prepared:
-            return (lambda _: {"type": "cancel", "order_id": identifier}), {"order_id": identifier}
+            summary = {"order_id": identifier}
+            return (lambda _: {"type": "cancel", "order_id": identifier}), summary, 0
 
         return await self._submit("cancel_order", "cancel", prepare)
+
+    async def cancel_all(self) -> dict[str, Any]:
+        """TS2 kill-all: every resting and FairLag-held order of the account, at once."""
+
+        async def prepare() -> Prepared:
+            return (lambda _: {"type": "kill_all"}), {"cancel_all": "kill_all"}, 0
+
+        result = await self._submit("cancel_all_orders", "cancel", prepare)
+        status = result.get("status")
+        if status == "accepted":
+            result["effect"] = (
+                "Every resting and FairLag-held order of the account was cancelled. Orders "
+                "placed after this command are not affected."
+            )
+        elif status == "outcome_unknown":
+            result["effect"] = "Orders may or may not be cancelled until recovery resolves it."
+        else:
+            result["effect"] = "No order was cancelled."
+        return result
 
     async def dead_man_switch(self, *, seconds: int, purpose: str) -> dict[str, Any]:
         if seconds:
@@ -795,16 +841,16 @@ class Trader:
                 return {"type": "dead_man_switch", "deadline_ms": str(deadline["ms"])}
 
             summary = {"dead_man_switch": "disarm"} if not seconds else {"delay_seconds": seconds}
-            return action, summary
+            return action, summary, ONE_SHOT_LIFETIME_MS
 
         result = await self._submit(purpose, "dead_man_switch", prepare)
         status = result.get("status")
         if status == "accepted" and "ms" in deadline:
             result["deadline"] = utc(deadline["ms"])
             result["effect"] = (
-                "At the first oracle observation at or after the deadline (roughly every 10 to "
-                "20 seconds) all of this account's resting orders are cancelled and the switch "
-                "disarms. Arming again replaces the deadline. Refresh it to keep orders alive."
+                "Right after the deadline every resting and FairLag-held order of this account "
+                "is cancelled and the switch disarms. Arming again replaces the deadline. "
+                "Refresh it to keep orders alive."
             )
         elif status == "accepted":
             result["effect"] = "The dead man's switch is disarmed."
@@ -815,13 +861,12 @@ class Trader:
         return result
 
     async def leverage(self, *, leverage: int) -> dict[str, Any]:
-        if not 1 <= leverage <= 1000:
-            raise ToolProblem("leverage must be a whole number from 1 to 1000.")
+        if not 1 <= leverage <= MAX_LEVERAGE:
+            raise ToolProblem(f"leverage must be a whole number from 1 to {MAX_LEVERAGE}.")
 
         async def prepare() -> Prepared:
-            return (lambda _: {"type": "leverage", "leverage": str(leverage)}), {
-                "leverage": str(leverage)
-            }
+            action = {"type": "leverage", "leverage": str(leverage)}
+            return (lambda _: action), {"leverage": str(leverage)}, ONE_SHOT_LIFETIME_MS
 
         return await self._submit("set_leverage", "place", prepare)
 
@@ -831,7 +876,8 @@ class Trader:
             raise ToolProblem("mode must be FIXED or PNL.")
 
         async def prepare() -> Prepared:
-            return (lambda _: {"type": "fee_mode", "mode": mode}), {"mode": mode}
+            action = {"type": "fee_mode", "mode": mode}
+            return (lambda _: action), {"mode": mode}, ONE_SHOT_LIFETIME_MS
 
         return await self._submit("set_fee_mode", "place", prepare)
 
@@ -849,18 +895,20 @@ class Trader:
                     "pending_requests": [_pending_view(item) for item in waiting],
                     "guidance": PENDING_GUIDANCE,
                 }
-            if self._grant is None or not self._grant["permissions"] & PERMISSION[permission]:
+            material = (self._grant or {}).get("material") or {}
+            if not int(material.get("permissions") or 0) & PERMISSION[permission]:
                 raise ToolProblem(
                     f"This key lacks the {permission.replace('_', ' ')} permission. Create a new "
                     "API key in the Arena terminal."
                 )
-            make_action, summary = await prepare()
+            make_action, summary, lifetime = await prepare()
             try:
                 snapshot = await client.snapshot()
             except AgentError as error:
                 return self._record(kind, summary, self._refusal(client, error.code))
-            now = int(snapshot["context"]["protocol_time_ms"])
-            expiry = min(now + INTENT_LIFETIME_MS, int(snapshot["public_grant"]["expiresAtMs"]))
+            now = _now_ms(snapshot["context"])
+            key_expiry = int(snapshot["public_grant"]["material"]["expires_at_ms"])
+            expiry = min(now + (lifetime or ONE_SHOT_LIFETIME_MS), key_expiry)
             if expiry <= now + 1_000:
                 raise ToolProblem(
                     "This key has expired. Create a new API key in the Arena terminal."
@@ -872,9 +920,7 @@ class Trader:
             }
             # Written before signing: if the journal is broken, nothing is signed, and a
             # cancelled or crashed call still leaves a record of what was being sent.
-            problem = self._journal(
-                "submitting", {"for": kind, "request": summary, "nonce": request["nonce"]}
-            )
+            problem = self._journal("submitting", {"for": kind, "request": summary})
             if problem:
                 raise ToolProblem(problem + " Nothing was signed.")
             try:
@@ -883,7 +929,6 @@ class Trader:
                 outcome = self._refusal(client, error.code)
             else:
                 outcome = self._executed(result)
-            outcome["nonce"] = request["nonce"]
         return self._record(kind, summary, outcome)
 
     def _record(
@@ -899,33 +944,34 @@ class Trader:
     @staticmethod
     def _executed(result: dict[str, Any]) -> dict[str, Any]:
         ack, recovery = result["ack"], result["recovery"]
-        accepted = recovery["status"] == "accepted"
-        return {
-            "status": "accepted" if accepted else "rejected",
-            "engine_outcome": ack["outcome"],
-            "batch": str(ack["batch"]),
-            "generation": ack["generation"],
-            "step": ack["step"],
-            "duplicate": ack["duplicate"],
-            "meaning": (
-                "The matching engine executed this command in soft, operator-trusted state. "
-                "An order may rest, fill or partly fill. " + ACCOUNT_VISIBILITY
-            )
-            if accepted
-            else (
-                "The engine refused this command, for example for insufficient margin, a "
-                "post-only order that would cross or a reduce-only order with nothing to "
-                "reduce. Nothing executed."
-            ),
+        status = recovery["status"]
+        outcome: dict[str, Any] = {
+            "status": {"accepted": "accepted", "rejected": "rejected"}.get(status, "not_executed"),
+            "action": ack["action"],
+            "duplicate": bool(ack.get("duplicate", False)),
         }
+        for key in ("order_id", "held", "batch", "lineage"):
+            if key in ack:
+                outcome[key] = ack[key]
+        if status == "accepted":
+            outcome["meaning"] = (
+                "The exchange journaled this command in soft, operator-trusted state. An order "
+                "then waits for FairLag and may rest, fill or partly fill. Keep its order_id to "
+                "cancel it. " + ACCOUNT_VISIBILITY
+            )
+        elif status == "rejected":
+            outcome["meaning"] = "The exchange refused this command. Nothing executed."
+        else:
+            outcome["meaning"] = "Its batch was voided. It never takes effect."
+        return outcome
 
     @staticmethod
     def _refusal(client: Any, code: str) -> dict[str, Any]:
-        if code in NOT_PLACED:
+        if code in ts2.NOT_PLACED:
             return {
                 "status": "not_placed",
                 "reason": code,
-                "retry": NOT_PLACED[code],
+                "retry": ts2.NOT_PLACED[code],
                 "guidance": NOT_PLACED_GUIDANCE[code],
             }
         if code == "outcome_unknown":
@@ -934,11 +980,10 @@ class Trader:
             except AgentError:
                 pending = True
             if not pending:
-                # The SDK already resolved it from the original's own batch history:
-                # its batch closed without it or was voided, so it never executed.
+                # The SDK already resolved it from the original's exact lookup.
                 return {
                     "status": "not_executed",
-                    "guidance": "Its batch closed or was voided before it executed. Nothing was "
+                    "guidance": "Its exact lookup resolved it without effect. Nothing was "
                     "placed. Submit a new request if it is still wanted.",
                 }
             return {
@@ -1000,13 +1045,11 @@ class Trader:
             status = result["status"]
             outcome = {
                 "status": status,
-                "resolved": status in ("accepted", "rejected", "not_admitted", "not_settled"),
+                "resolved": status in ts2.TERMINAL,
                 "meaning": RECOVERY_MEANINGS.get(
                     status, "Unexpected status. The original stays retained."
                 ),
             }
-            if isinstance(result.get("voided_batch"), dict):
-                outcome["voided_batch"] = result["voided_batch"]
             remaining = len(waiting) - (1 if outcome["resolved"] else 0)
             if remaining:
                 outcome["other_pending_requests"] = remaining

@@ -1,0 +1,183 @@
+{
+  "cancel": {
+    "agentSecret": "0x2222222222222222222222222222222222222222222222222222222222000001",
+    "request": {
+      "account": "1",
+      "agent": "0x6b677a9edf9423386222980cfe937c4b27ff6057844a64f1636b854abce5b145",
+      "orderId": "0xaa01b8bc42adafb0ee5dc4673f22ae67e471d4cdaa2b1d86b3cff62b84877359",
+      "signature": "0x07d521b532c7fb2dad74c757123fb958c4b1f0f1571f8b90effbc7ba7ea04381ee5f69b645419aa54b16d2970797456386401675cf1ba48df4f296e6f9c2f10c"
+    },
+    "signingMessage": "0x46565f5453325f43414e43454c5f53494700f163cd7e9f2d65d25fe198d124c7fe81ffd313a86e55c97a685942ffd5503f800000000000000001aa01b8bc42adafb0ee5dc4673f22ae67e471d4cdaa2b1d86b3cff62b84877359"
+  },
+  "delegation": {
+    "digest": "0x4b861f5c2d805934423fee747d02138bfc7d8f5dbb155802baed3719d669a9df",
+    "owner": "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+    "ownerDevAccountIndex": 1,
+    "request": {
+      "account": "1",
+      "delegation": {
+        "account": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "agentPublicKey": "0x6b677a9edf9423386222980cfe937c4b27ff6057844a64f1636b854abce5b145",
+        "canWithdraw": false,
+        "expiresAtMs": "1800604800000",
+        "issuedAtMs": "1800000000000",
+        "maxExpiryMs": "1800604800000",
+        "nonce": "1",
+        "owner": "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+        "permissions": 7
+      },
+      "signature": "0x43a8bcd889c0cc34075a13ccbcbce8913a7a17a9bb2583fbba3358798cbfecbd2d5198be901acd2cd368884b2752b4db6f2f2b904b8ab625c8ceea9bac2e2bb01b"
+    }
+  },
+  "domain": {
+    "chainId": 31337,
+    "configHash": "0xf163cd7e9f2d65d25fe198d124c7fe81ffd313a86e55c97a685942ffd5503f80",
+    "eip712DomainSeparator": "0x39fa1b6d3381c3de602be7a7faf8e6a9e1dc4901fd38176da4c92f5e9c8e98e3",
+    "marketId": "0x1a362a95edeac7089a50b132d63c8f0f0a50a9a45d10c9b46474c73c9ee4abfd",
+    "protocolParamsHash": "0xb39296065b523fbf73f23236b7304fbc62a7455b772bd8ac02f402ac564a6526",
+    "receiptSigner": "0xd8291e50e2e68fb2c70d77ccdc707d291a89f209",
+    "settlement": "0x5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+  },
+  "intents": [
+    {
+      "agentPublicKey": "0x6b677a9edf9423386222980cfe937c4b27ff6057844a64f1636b854abce5b145",
+      "agentSecret": "0x2222222222222222222222222222222222222222222222222222222222000001",
+      "intent": {
+        "account": "1",
+        "agent": "0x6b677a9edf9423386222980cfe937c4b27ff6057844a64f1636b854abce5b145",
+        "clientNonce": "42",
+        "delegationNonce": "1",
+        "expiresAtMs": "1800000600000",
+        "feeMode": 0,
+        "kind": 0,
+        "limitPriceTicks": "600000",
+        "postOnly": false,
+        "quantityLots": "10",
+        "reduceOnly": false,
+        "side": 0,
+        "timeInForce": 0
+      },
+      "intentCoreHash": "0x66a1a4eea02e328f1a3ecb7229e8248bc7666a495692da6c48811fdd3b4cef0e",
+      "intentCorePreimage": "0x4661697256656e75652e7473322e696e74656e742d636f72652e763100f163cd7e9f2d65d25fe198d124c7fe81ffd313a86e55c97a685942ffd5503f8000000000000000016b677a9edf9423386222980cfe937c4b27ff6057844a64f1636b854abce5b1450000000000000001000000000000002a00000000000000000000000927c0000000000000000a",
+      "name": "limit GTC buy 0.010 @ 60000.0",
+      "orderId": "0xaa01b8bc42adafb0ee5dc4673f22ae67e471d4cdaa2b1d86b3cff62b84877359",
+      "orderIdPreimage": "0x4661697256656e75652e7473322e6f726465722e76310066a1a4eea02e328f1a3ecb7229e8248bc7666a495692da6c48811fdd3b4cef0e000001a3186577c0",
+      "signature": "0x601a674552297a5a273ed0076d766d21c19858291f3a6c745fc99a380f9a0daf305d46505202549fe9a1ce2a308bc1d3cf7dad78b129be534f342e756642060c",
+      "signingMessage": "0x46565f5453325f4f524445525f53494700aa01b8bc42adafb0ee5dc4673f22ae67e471d4cdaa2b1d86b3cff62b84877359"
+    },
+    {
+      "agentPublicKey": "0x6b677a9edf9423386222980cfe937c4b27ff6057844a64f1636b854abce5b145",
+      "agentSecret": "0x2222222222222222222222222222222222222222222222222222222222000001",
+      "intent": {
+        "account": "1",
+        "agent": "0x6b677a9edf9423386222980cfe937c4b27ff6057844a64f1636b854abce5b145",
+        "clientNonce": "43",
+        "delegationNonce": "1",
+        "expiresAtMs": "1800000600000",
+        "feeMode": 0,
+        "kind": 0,
+        "limitPriceTicks": "600015",
+        "postOnly": true,
+        "quantityLots": "1234",
+        "reduceOnly": false,
+        "side": 1,
+        "timeInForce": 0
+      },
+      "intentCoreHash": "0x9c0ea873ace770f0a1e6879ade58c235c3654e276f4c44c24f5f63175a16d6b6",
+      "intentCorePreimage": "0x4661697256656e75652e7473322e696e74656e742d636f72652e763100f163cd7e9f2d65d25fe198d124c7fe81ffd313a86e55c97a685942ffd5503f8000000000000000016b677a9edf9423386222980cfe937c4b27ff6057844a64f1636b854abce5b1450000000000000001000000000000002b01000001000000000000000927cf00000000000004d2",
+      "name": "limit GTC sell post-only 1.234 @ 60001.5",
+      "orderId": "0xa4753978561d72d4f2209d4273fd3d06728f4787f4028c319664b52cbc0d005f",
+      "orderIdPreimage": "0x4661697256656e75652e7473322e6f726465722e7631009c0ea873ace770f0a1e6879ade58c235c3654e276f4c44c24f5f63175a16d6b6000001a3186577c0",
+      "signature": "0xba0f937bc9954f1b433146acd2cd6f5c00ab29bedac3456888f569c24caaa9ec8bef99b50ec1adda399d490728095f0ea38df3602c7a433c359c2affab87ba04",
+      "signingMessage": "0x46565f5453325f4f524445525f53494700a4753978561d72d4f2209d4273fd3d06728f4787f4028c319664b52cbc0d005f"
+    },
+    {
+      "agentPublicKey": "0x6b677a9edf9423386222980cfe937c4b27ff6057844a64f1636b854abce5b145",
+      "agentSecret": "0x2222222222222222222222222222222222222222222222222222222222000001",
+      "intent": {
+        "account": "1",
+        "agent": "0x6b677a9edf9423386222980cfe937c4b27ff6057844a64f1636b854abce5b145",
+        "clientNonce": "44",
+        "delegationNonce": "1",
+        "expiresAtMs": "1800000030000",
+        "feeMode": 0,
+        "kind": 1,
+        "limitPriceTicks": "590000",
+        "postOnly": false,
+        "quantityLots": "5",
+        "reduceOnly": false,
+        "side": 1,
+        "timeInForce": 1
+      },
+      "intentCoreHash": "0xea58f92dd1d3670f9fdc8b7916acd08ee83501367257131c1de04b33448d9752",
+      "intentCorePreimage": "0x4661697256656e75652e7473322e696e74656e742d636f72652e763100f163cd7e9f2d65d25fe198d124c7fe81ffd313a86e55c97a685942ffd5503f8000000000000000016b677a9edf9423386222980cfe937c4b27ff6057844a64f1636b854abce5b1450000000000000001000000000000002c01010100000000000000000900b00000000000000005",
+      "name": "market IOC sell, worst price 59000.0",
+      "orderId": "0xede5133ebc717c090a00fcc86e6436552cd0ed8e1beccebea3d9fd43e8919f1a",
+      "orderIdPreimage": "0x4661697256656e75652e7473322e6f726465722e763100ea58f92dd1d3670f9fdc8b7916acd08ee83501367257131c1de04b33448d9752000001a3185cc530",
+      "signature": "0xcdaa9ee73d6955bf2b5077695c8413689cac48447cf7cb40c5e7c68bb049d4afef54d4f7081bcb3a18efb058af66f6c08506e4af2d7eb425e9896634800a3f0d",
+      "signingMessage": "0x46565f5453325f4f524445525f53494700ede5133ebc717c090a00fcc86e6436552cd0ed8e1beccebea3d9fd43e8919f1a"
+    },
+    {
+      "agentPublicKey": "0x6b677a9edf9423386222980cfe937c4b27ff6057844a64f1636b854abce5b145",
+      "agentSecret": "0x2222222222222222222222222222222222222222222222222222222222000001",
+      "intent": {
+        "account": "1",
+        "agent": "0x6b677a9edf9423386222980cfe937c4b27ff6057844a64f1636b854abce5b145",
+        "clientNonce": "18446744073709551615",
+        "delegationNonce": "1",
+        "expiresAtMs": "1800000600000",
+        "feeMode": 0,
+        "kind": 0,
+        "limitPriceTicks": "10000000000",
+        "postOnly": false,
+        "quantityLots": "1000000000",
+        "reduceOnly": true,
+        "side": 0,
+        "timeInForce": 2
+      },
+      "intentCoreHash": "0x462baa927929eb13a1dc061d06af32b4e951c536fa02095ad19b59ef57e22a54",
+      "intentCorePreimage": "0x4661697256656e75652e7473322e696e74656e742d636f72652e763100f163cd7e9f2d65d25fe198d124c7fe81ffd313a86e55c97a685942ffd5503f8000000000000000016b677a9edf9423386222980cfe937c4b27ff6057844a64f1636b854abce5b1450000000000000001ffffffffffffffff00000200010000000002540be400000000003b9aca00",
+      "name": "limit FOK buy reduce-only",
+      "orderId": "0x927cdb1e70a0a25799cf2fc9b567fb6d0c01bad00fe0601ecb443b76b055d4fc",
+      "orderIdPreimage": "0x4661697256656e75652e7473322e6f726465722e763100462baa927929eb13a1dc061d06af32b4e951c536fa02095ad19b59ef57e22a54000001a3186577c0",
+      "signature": "0xfd0c13829f8e52e4391e39f7da1739668e65670d6e2b0be9e0fcbb140261ac673949e43ef96d29973ab00b139d87fb52aa78f6299d5dd05076a15e3adc7fb60d",
+      "signingMessage": "0x46565f5453325f4f524445525f53494700927cdb1e70a0a25799cf2fc9b567fb6d0c01bad00fe0601ecb443b76b055d4fc"
+    }
+  ],
+  "read": {
+    "account": "1",
+    "agentSecret": "0x2222222222222222222222222222222222222222222222222222222222000001",
+    "expiresAtMs": "1800000030000",
+    "headers": {
+      "x-ts2-read-account": "1",
+      "x-ts2-read-agent": "0x6b677a9edf9423386222980cfe937c4b27ff6057844a64f1636b854abce5b145",
+      "x-ts2-read-expires": "1800000030000",
+      "x-ts2-read-signature": "0xbb858a12591715a6af471d3e806ce515bc6e30e70a3b0876b73d6719c00d0d003dddfaca3f858b57fff0e3f263bf422eb8dc5bc66b1506c8b028a34a447dcd0c"
+    },
+    "kind": 2,
+    "signingMessage": "0x46565f5453325f524541445f53494700f163cd7e9f2d65d25fe198d124c7fe81ffd313a86e55c97a685942ffd5503f80020000000000000001aa01b8bc42adafb0ee5dc4673f22ae67e471d4cdaa2b1d86b3cff62b84877359000001a3185cc530",
+    "target": "0xaa01b8bc42adafb0ee5dc4673f22ae67e471d4cdaa2b1d86b3cff62b84877359"
+  },
+  "schema": "fairvenue-ts2-client-vectors-v1",
+  "tags": {
+    "cancelSig": "0x46565f5453325f43414e43454c5f53494700",
+    "configTag": "FairVenue.ts2.config.v1",
+    "intentCore": "0x4661697256656e75652e7473322e696e74656e742d636f72652e763100",
+    "order": "0x4661697256656e75652e7473322e6f726465722e763100",
+    "orderSig": "0x46565f5453325f4f524445525f53494700",
+    "readSig": "0x46565f5453325f524541445f53494700"
+  },
+  "warning": "TEST keys only (host/src/keys.rs agent seeds; public Anvil dev account 1 as owner)",
+  "withdrawal": {
+    "digest": "0x2f2edd47591fbcf3f02c1710e1b5652e583e462f0a850572a761223e65d1b9bd",
+    "ownerDevAccountIndex": 1,
+    "request": {
+      "account": "1",
+      "expiresAtMs": "1800000600000",
+      "micros": "1000000",
+      "nonce": "1",
+      "recipient": "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+      "signature": "0x55979463df765b4885ad84f489f3983772ca9d32bb20dba6503405af8ac05c7e69b8415cb47973443caea6c5c29b3c12c92beac005e9fe316b6e4675b8e65f1e1c"
+    }
+  }
+}

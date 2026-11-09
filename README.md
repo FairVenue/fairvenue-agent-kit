@@ -12,6 +12,14 @@ credentials to an external venue.
 Status: early testnet tooling, not a live trading service. Pin a reviewed commit before relying on
 it. This repository does not include the FairVenue backend or grant hosted access.
 
+**TS2 upgrade (version 0.3.0).** The native TESTNET now runs the TS2 settlement. The MCP server
+and the native SDK speak TS2 from version 0.3.0. Tool names, tool arguments and the SDK calls are
+unchanged. Bot keys made before the upgrade no longer sign. They are refused with
+"TS2: create a new bot key", so create a new key once with **Create API key & download JSON**.
+Then update the plugin (or the `uvx` command) and restart your agent's client. Orders must now
+use whole ticks and steps, accepted orders return their `order_id` for `cancel_order`, and order
+modify is gone: cancel and place a new order. See [docs/MCP.md](docs/MCP.md).
+
 ## Start with your coding agent
 
 Install the plugin: the `fairvenue` skill teaches your agent how FairVenue works, and the MCP
@@ -69,18 +77,19 @@ Scoring days are **November 16, 17 and 18, 2026 (UTC)**. Each day is scored sepa
 rankings within those days decide the winners. It runs only with 50+ participants. Only API
 trades count: trades signed with a bot
 key from **Create API key & download JSON**, including trades your agent signs through the MCP
-server. Full rules: [fairvenue.xyz/hackathon/rules](https://fairvenue.xyz/hackathon/rules) and
+server. Keys made before the TS2 upgrade no longer sign, so create a new one. Full rules: [fairvenue.xyz/hackathon/rules](https://fairvenue.xyz/hackathon/rules) and
 [skills/fairvenue/references/hackathon.md](skills/fairvenue/references/hackathon.md). Bug reports
 and testnet analyses go in a GitHub issue titled `[Hackathon bug]` or `[Hackathon analysis]`.
 
 ## Native TESTNET SDK
 
 [`experimental/native-testnet`](experimental/native-testnet/README.md) provides
-`fairvenue_schema6.NativeTestnetClient` for standalone bots: independently reviewed deployment
-pins, a downloaded bot key, a no-order dry run and exact-original recovery. The MCP server is an
-optional extra of the same package (`fairvenue-schema6-agent[mcp]`). The native package does not
-accept V0 credentials and does not establish hosted funding, liquidity, proof verification or
-release readiness.
+`fairvenue_schema6.NativeTestnetClient` for standalone bots: independently reviewed TS2
+deployment pins, a downloaded TS2 bot key (`fairvenue-ts2-testnet-agent-v1`), a no-order dry run
+and exact-original recovery. Its signing bytes, order ids and request digests match the shared
+TS2 JS and Rust vectors. The MCP server is an optional extra of the same package
+(`fairvenue-schema6-agent[mcp]`). The native package does not accept V0 or V4 credentials and
+does not establish hosted funding, liquidity, proof verification or release readiness.
 
 ## Legacy virtual Arena SDK
 

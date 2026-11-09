@@ -1,0 +1,79 @@
+{
+  "schema": "fairvenue-ts2-client-security-vectors-v1",
+  "vectors": [
+    {
+      "request": {
+        "account_key": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "action": { "client_nonce": "9007199254740993", "type": "kill_all" },
+        "agent_public_key": "0x6b677a9edf9423386222980cfe937c4b27ff6057844a64f1636b854abce5b145",
+        "chain_id": 31337,
+        "config_hash": "0xf163cd7e9f2d65d25fe198d124c7fe81ffd313a86e55c97a685942ffd5503f80",
+        "schema": "fairvenue-ts2-agent-request-v1",
+        "settlement": "0x5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+        "signature": "0x66777781e8935b35f31cef5e8493a1528ebfe564e52be74f9417206591468ded7d7394b47ed407057698848561c55e64c69ac4657ce376a566e73c61ac9b570e"
+      },
+      "signing_message": "0x46565f5453325f4b494c4c414c4c5f53494700f163cd7e9f2d65d25fe198d124c7fe81ffd313a86e55c97a685942ffd5503f8000000000000000010020000000000001",
+      "request_sha256": "0x6feb12aa5ab302e2b66d111eaf22b24e1e795bbb67b25d20283eb28965e9b3b5"
+    },
+    {
+      "request": {
+        "account_key": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "action": {
+          "command_nonce": "9007199254740993",
+          "deadline_ms": "1800000300000",
+          "delegation_nonce": "1",
+          "expires_at_ms": "1800000600000",
+          "type": "set_dms"
+        },
+        "agent_public_key": "0x6b677a9edf9423386222980cfe937c4b27ff6057844a64f1636b854abce5b145",
+        "chain_id": 31337,
+        "config_hash": "0xf163cd7e9f2d65d25fe198d124c7fe81ffd313a86e55c97a685942ffd5503f80",
+        "schema": "fairvenue-ts2-agent-request-v1",
+        "settlement": "0x5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+        "signature": "0x22dbb5d44ee70d57c06fa47a3cb8686deef03ce4df207ae8c8defb63fed6d4670281556e0259e93db95ae3d573936f24f2d78757abd42b6b764636a23987f10f"
+      },
+      "signing_message": "0x46565f5453325f53454355524954595f53494700e790667ca20b9631822546443aba37f2096940e5f206d31a19f48c26f0202af0",
+      "request_sha256": "0x04cccce7cc20e8207f31607da344f0596e83509c7c9054a05f1b44ec96b65812"
+    },
+    {
+      "request": {
+        "account_key": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "action": {
+          "command_nonce": "9007199254740994",
+          "delegation_nonce": "1",
+          "expires_at_ms": "1800000600000",
+          "fee_mode": 1,
+          "type": "set_fee_mode"
+        },
+        "agent_public_key": "0x6b677a9edf9423386222980cfe937c4b27ff6057844a64f1636b854abce5b145",
+        "chain_id": 31337,
+        "config_hash": "0xf163cd7e9f2d65d25fe198d124c7fe81ffd313a86e55c97a685942ffd5503f80",
+        "schema": "fairvenue-ts2-agent-request-v1",
+        "settlement": "0x5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+        "signature": "0x3ff73361888c63fa77579f86d79ae21fa09479bebaa1730c95a364127921a2d9b001be10e6b8e9499e1d0085e84954e7e55ceb56dd4629765e02707f2c022e0d"
+      },
+      "signing_message": "0x46565f5453325f53454355524954595f53494700ef9e86e7aaea768c5b256c306de64da1a94b9c173deaaa3acee2a053e68dec4d",
+      "request_sha256": "0x76b4a386b6c9c6bc0a2e2af94ed7e98a1d9852154d5391637f504d3580203d75"
+    },
+    {
+      "request": {
+        "account_key": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "action": {
+          "command_nonce": "9007199254740995",
+          "delegation_nonce": "1",
+          "expires_at_ms": "1800000600000",
+          "leverage": "100",
+          "type": "set_leverage"
+        },
+        "agent_public_key": "0x6b677a9edf9423386222980cfe937c4b27ff6057844a64f1636b854abce5b145",
+        "chain_id": 31337,
+        "config_hash": "0xf163cd7e9f2d65d25fe198d124c7fe81ffd313a86e55c97a685942ffd5503f80",
+        "schema": "fairvenue-ts2-agent-request-v1",
+        "settlement": "0x5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+        "signature": "0x3749cacdd5953318029d80ac86b6367fe9f9fe24ea93282dbcdf11b7a41c9e8f4d9c8347b7394a06432d6056289101a7f4ea93d42615c198551bc3b1a81f9006"
+      },
+      "signing_message": "0x46565f5453325f53454355524954595f53494700d354f96a5f57cdc383fccc8a46801f6b13b499d02cffdf2607826f0e16e6d1c4",
+      "request_sha256": "0x2344fcedd2ef1ec041ac212dd3380601835203bb1e577b162c2c3bdf819cf5e2"
+    }
+  ]
+}

@@ -2,7 +2,7 @@
 
 The official rules are on [fairvenue.xyz/hackathon/rules](https://fairvenue.xyz/hackathon/rules)
 and the Hackathon tab in Arena. If anything here differs, those win. Everything runs on the
-native TESTNET with mock tokens. Testnet tokens have no monetary value.
+native TS2 TESTNET with mock tokens. Testnet tokens have no monetary value.
 
 ## Prizes
 
@@ -44,6 +44,10 @@ $1,005 in total, paid in crypto. The hackathon runs only with 50+ participants.
 
 - Check that their trades will count: a fresh bot key from the setup page, not the browser
   terminal key.
+- The testnet now runs TS2. Bot keys made before the upgrade no longer sign and are refused with
+  "TS2: create a new bot key". Every participant creates a new key with **Create API key &
+  download JSON** and updates the MCP server or the native SDK to the TS2 version. Tool names,
+  arguments and the SDK calls stay the same.
 - Pick one trading prize to target. Maker and taker volume both need PnL above zero and a Sharpe
   ratio above 1 on the day, so size risk for steady hourly returns rather than one large bet.
 - Plan to cover every UTC hour of each scoring day, which usually means a standalone bot rather

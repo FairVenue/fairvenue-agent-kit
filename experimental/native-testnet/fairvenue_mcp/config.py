@@ -12,14 +12,18 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-#: SHA256 of the deployment pins packaged at this commit
-#: (``fairvenue_schema6/deployments/arbitrum-sepolia-1k.json``). The override
+#: SHA256 of the TS2 deployment pins packaged at this commit
+#: (``fairvenue_schema6/deployments/arbitrum-sepolia-ts2.json``). The override
 #: ``FAIRVENUE_INSTALLATION_SHA256`` only selects a separately reviewed pin file
-#: for the same settlement (for example new gateway keys): the SDK hard-codes the
-#: settlement and mock token, so a new deployment needs an updated kit.
-PACKAGED_INSTALLATION_SHA256 = "9a39af143e67f4675f05998bedbafb02a052819d23a2129674db8f8588938d4d"
+#: for the same deployment (for example another approved API origin): the SDK
+#: hard-codes the TS2 settlement and config hash, so a new deployment needs an
+#: updated kit.
+PACKAGED_INSTALLATION_SHA256 = "8a7cb56d98859cfb6e69b2416e4ae7eb3974a6a1012867bb7b1b205a2d1ab169"
 
-DEFAULT_HOME = "~/.fairvenue/native-testnet"
+#: A fresh profile for TS2. The retired V4 profile (``LEGACY_V4_HOME``) is never
+#: read, changed or deleted: its keys and pending originals cannot act on TS2.
+DEFAULT_HOME = "~/.fairvenue/ts2-testnet"
+LEGACY_V4_HOME = "~/.fairvenue/native-testnet"
 DEFAULT_DOWNLOAD_DIRS = ("~/Downloads",)
 
 DEFAULT_MAX_ORDER_QUANTITY = Decimal("0.01")

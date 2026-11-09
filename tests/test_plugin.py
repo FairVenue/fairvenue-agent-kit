@@ -66,16 +66,25 @@ def test_every_launcher_runs_the_same_packaged_server() -> None:
 
 
 def test_packaged_deployment_pin_is_the_one_everything_names() -> None:
-    pins = NATIVE / "fairvenue_schema6/deployments/arbitrum-sepolia-1k.json"
+    pins = NATIVE / "fairvenue_schema6/deployments/arbitrum-sepolia-ts2.json"
     digest = hashlib.sha256(pins.read_bytes()).hexdigest()
     config = (NATIVE / "fairvenue_mcp/config.py").read_text()
     assert f'PACKAGED_INSTALLATION_SHA256 = "{digest}"' in config
     source = json.loads((NATIVE / "SOURCE.json").read_text())
-    extensions = {entry["path"]: entry["sha256"] for entry in source["public_extensions"]}
-    assert extensions["fairvenue_schema6/deployments/arbitrum-sepolia-1k.json"] == digest
-    assert digest in (ROOT / "skills/fairvenue/references/native-testnet.md").read_text()
-    settlement = json.loads(pins.read_bytes())["settlement"]
-    assert settlement in (ROOT / "skills/fairvenue/references/native-testnet.md").read_text()
+    imported = {entry["path"]: entry["sha256"] for entry in source["byte_identical"]}
+    assert imported["fairvenue_schema6/deployments/arbitrum-sepolia-ts2.json"] == digest
+    assert not (NATIVE / "fairvenue_schema6/deployments/arbitrum-sepolia-1k.json").exists()
+    guide = (ROOT / "skills/fairvenue/references/native-testnet.md").read_text()
+    assert digest in guide
+    deployment = json.loads(pins.read_bytes())
+    for pin in (
+        deployment["settlement"],
+        deployment["config_hash"],
+        "fairvenue-ts2-testnet-agent-v1",
+    ):
+        assert pin in guide, pin
+    for document in ("docs/MCP.md", "experimental/native-testnet/README.md"):
+        assert "TS2: create a new bot key" in (ROOT / document).read_text(), document
 
 
 def test_hackathon_facts_match_between_skill_and_server() -> None:
@@ -83,10 +92,10 @@ def test_hackathon_facts_match_between_skill_and_server() -> None:
     guide = (NATIVE / "fairvenue_mcp/guide.py").read_text().replace("\\\n", "")
     guide = " ".join(guide.split())
     for fact in (
-        "November 4, 5 and 6, 2026 (UTC). Each day is scored separately, and the rankings "
+        "November 16, 17 and 18, 2026 (UTC). Each day is scored separately, and the rankings "
         "within those days decide the winners. Only trading on those days is ranked.",
         "the account that traded more before the scoring days ranks higher.",
-        "Submissions close Nov 6, 2026, 23:59 UTC.",
+        "Submissions close Nov 18, 2026, 23:59 UTC.",
         "Requires PnL > 0 and Sharpe > 1.",
         "Requires Sharpe > 2.",
         "$1,005 in total, paid in crypto",

@@ -1,7 +1,7 @@
-"""Explicit deployed operator-beta TESTNET client, not the source-closed client.
+"""Explicit TS2 operator-beta TESTNET agent client, not the source-closed client.
 
-No V0 request translation, Google cookies, wallet signing, faucet or withdrawal.
-One exact public original is durable before admission; recovery never resends.
+No V0/V4 request translation, Google cookies, wallet signing, faucet or withdrawal.
+One exact public signed original is durable before admission; recovery never resends.
 """
 
 from __future__ import annotations
@@ -10,7 +10,6 @@ import asyncio
 import copy
 import hashlib
 import inspect
-import json
 import os
 import secrets
 import sqlite3
@@ -19,14 +18,11 @@ import time
 import weakref
 from urllib.parse import quote
 
-from .client import AgentClient, _json, _snapshot
-from .context import REQUEST_SCHEMA, RESPONSE_SCHEMA, _scope, _signing_bytes
+from . import ts2
+from .client import _json, _snapshot
 from .crypto import CryptoPrimitives
-from .key_file import (_NATIVE_MOCK_TOKEN, _NATIVE_SETTLEMENT, _native_api_url,
-                       load_native_testnet_agent_key)
-from .protocol import (NOT_PLACED, SAFE, AdmitRefusal, AgentError, action_copy, build,
-                       context_copy, decimal, encoded_hex, exact, fail, grant_copy,
-                       hex_value, integer, jcs, policy_copy)
+from .key_file import _native_api_url, load_native_testnet_agent_key
+from .protocol import AdmitRefusal, AgentError, encoded_hex, exact, fail, integer
 from .transport import HttpTransport
 
 _TABLE = ("CREATE TABLE original(singleton INTEGER PRIMARY KEY CHECK(singleton=1),"
@@ -34,10 +30,19 @@ _TABLE = ("CREATE TABLE original(singleton INTEGER PRIMARY KEY CHECK(singleton=1
           "highest INTEGER NOT NULL CHECK(highest>=0),pending BLOB CHECK(pending IS NULL OR "
           "(length(pending)>0 AND length(pending)<=16384)))")
 _SIGNERS = weakref.WeakKeyDictionary()
+PENDING_SCHEMA = "fairvenue-ts2-public-original-v1"
+#: Browser parity: a resting order lives up to 23 hours (never past its key),
+#: an IOC, FOK or MARKET order and a security command 30 seconds.
+GTC_LIFETIME_MS = 23 * 60 * 60 * 1000
+ONE_SHOT_LIFETIME_MS = 30_000
+_RIGHTS = {"order": ts2.TRADE, "set_fee_mode": ts2.TRADE, "set_leverage": ts2.TRADE,
+           "cancel": ts2.CANCEL, "kill_all": ts2.CANCEL, "set_dms": ts2.DEAD_MAN_SWITCH}
+_TIME_IN_FORCE = {"GTC": 0, "IOC": 1, "FOK": 2}
+_INFO = "/api/v1/info"
 
 
 def _wire(value):
-    data = jcs(value).encode("utf-8")
+    data = ts2.canonical(value).encode()
     if not data or len(data) > 8192:
         fail()
     return data
@@ -49,34 +54,56 @@ def _file(info):
         fail()
 
 
-def _voided_batch(batch, opening):
-    """The exact ``voided_batch`` of a terminal ``not_settled`` recovery.
+def _nonce():
+    """A fresh random u64 (orders and kill-all deduplicate by it)."""
+    return str(secrets.randbits(64) or 1)
 
-    Validated identically by the Rust DTO and the browser: exactly the
-    request's own opening, voided by a strictly later generation. ``dead`` or
-    ``wrong_root`` (an adopted head replacement) name its nonzero transaction
-    hash; ``opening_failed`` names the failed original's nonzero hash when one
-    was signed, else ``None`` (JSON null). Numbers must be exact JSON integers
-    (never a bool or float that merely compares equal), strings exact strings.
-    """
-    exact(batch, ("batch","generation","replacement_generation","replacement_transaction",
-                  "reason","settled","re_executed"))
-    def whole(value):
-        return type(value) is int and 0 <= value <= SAFE
-    transaction, reason = batch["replacement_transaction"], batch["reason"]
-    if (not all(whole(value) for value in (batch["batch"], batch["generation"],
-                                            batch["replacement_generation"],
-                                            opening["batch"], opening["generation"]))
-            or batch["batch"] != opening["batch"]
-            or batch["generation"] != opening["generation"]
-            or batch["replacement_generation"] <= opening["generation"]
-            or type(reason) is not str or reason not in ("dead","wrong_root","opening_failed")
-            or transaction is None and reason != "opening_failed"
-            or transaction is not None and type(transaction) is not str
-            or batch["settled"] is not False or batch["re_executed"] is not False):
-        fail("response_invalid")
-    if transaction is not None:
-        hex_value(transaction)
+
+def _order(value):
+    """The order shape kept from earlier releases: decimal price and quantity."""
+    exact(value, ("symbol", "side", "order_type", "time_in_force", "price", "quantity",
+                  "reduce_only", "post_only"))
+    market = value["order_type"] == "MARKET"
+    if (value["symbol"] != "BTCUSDC" or value["side"] not in ("BUY", "SELL")
+            or value["order_type"] not in ("LIMIT", "MARKET")
+            or type(value["time_in_force"]) is not str
+            or value["time_in_force"] not in _TIME_IN_FORCE
+            or type(value["reduce_only"]) is not bool or type(value["post_only"]) is not bool
+            or type(value["quantity"]) is not str
+            or (market and (value["time_in_force"] == "GTC" or value["post_only"]))
+            or (value["post_only"] and value["time_in_force"] != "GTC")
+            or not (type(value["price"]) is str or (market and value["price"] is None))):
+        fail("invalid_order")
+    return dict(value)
+
+
+def _ui_action(value):
+    """One public action, checked before any I/O. ``modify`` does not exist on TS2."""
+    kind = value.get("type") if type(value) is dict else None
+    if kind == "modify":
+        fail("unsupported")
+    if kind == "place":
+        exact(value, ("type", "order"))
+        return {"type": "place", "order": _order(value["order"])}
+    if kind == "cancel":
+        exact(value, ("type", "order_id"))
+        ts2.fixed(value["order_id"], 32, nonzero=True)  # The 0x TS2 order id.
+    elif kind == "kill_all":
+        exact(value, ("type",))
+    elif kind == "fee_mode":
+        exact(value, ("type", "mode"))
+        if value["mode"] not in ("FIXED", "PNL"):
+            fail()
+    elif kind == "leverage":
+        exact(value, ("type", "leverage"))
+        if int(ts2.uint(value["leverage"], nonzero=True)) > 100:
+            fail()
+    elif kind == "dead_man_switch":
+        exact(value, ("type", "deadline_ms"))
+        ts2.uint(value["deadline_ms"])
+    else:
+        fail()
+    return dict(value)
 
 
 class _OriginalCustody:
@@ -193,11 +220,12 @@ class _OriginalCustody:
 
 
 class NativeTestnetClient:
-    """Distinct explicit native TESTNET client; installed pins are not discovered.
+    """Distinct explicit TS2 TESTNET client; installed pins are not discovered.
 
-    Use from_credentials with a downloaded TESTNET key, independently approved
-    policy/API URL and private continuity path. No request occurs at creation.
-    Separate processes/strategies require separate agent keys and custody.
+    Use from_credentials with a downloaded TS2 bot key, the independently
+    approved deployment pins and API URL and a private continuity path. No
+    request occurs at creation. Separate processes/strategies require separate
+    agent keys and custody. A V4 key file is refused ("TS2: create a new bot key").
     """
 
     @classmethod
@@ -213,23 +241,22 @@ class NativeTestnetClient:
                  custody_path, initialize=False):
         self._api = _native_api_url(approved_api_url)
         self._crypto = CryptoPrimitives()
-        self._policy = policy_copy(_json(_snapshot(policy)), self._crypto)
-        self._grant = grant_copy(_json(_snapshot(grant)), self._policy, self._crypto)
-        if (encoded_hex(self._policy["domain"]["settlement"]) != _NATIVE_SETTLEMENT
-                or self._grant["settlement"] != _NATIVE_SETTLEMENT
-                or getattr(signer, "public_key", None) != self._grant["agentPublicKey"]
+        self._pins = ts2.pinned(policy)
+        self._grant = ts2.grant_copy(grant, self._pins)
+        material = self._grant["material"]
+        if (getattr(signer, "public_key", None) != material["agent_public_key"]
+                or not self._crypto.strong(material["agent_public_key"])
                 or not callable(getattr(signer, "sign_bytes", None))
                 or not callable(getattr(transport, "post", None))):
             fail()
-        # The mock token is an exact published deployment pin, never a live
-        # token/account address discovered from an API response.
-        self.mock_token = _NATIVE_MOCK_TOKEN
+        # Exact published deployment pins, never discovered from an API response.
+        self.settlement, self.config_hash = self._pins["settlement"], self._pins["config_hash"]
         self._busy, self._inflight, self._loop, self._closed = False, set(), None, False
-        self._time_floor, self._nonce_floor = 0, 0
-        self._signer, self._post = signer, transport.post
+        self._signer, self._post, self._market = signer, transport.post, None
         if signer in _SIGNERS:
             fail("busy")
-        identity = hashlib.sha256(_snapshot({"api_url":self._api, "policy":policy, "grant":grant})).digest()
+        identity = hashlib.sha256(b"FairVenue.ts2.sdk-custody.v1\0" + ts2.canonical(
+            {"api_url": self._api, "pins": self._pins, "grant": self._grant}).encode()).digest()
         try:
             self._custody = _OriginalCustody(custody_path, identity, initialize)
         except Exception:
@@ -242,7 +269,7 @@ class NativeTestnetClient:
             raise
 
     def __repr__(self):
-        return "<NativeTestnetClient TESTNET operator-beta: secrets not exported>"
+        return "<NativeTestnetClient TS2 TESTNET operator-beta: secrets not exported>"
 
     def close(self):
         if self._busy or self._inflight:
@@ -262,25 +289,15 @@ class NativeTestnetClient:
         pending = self._custody.read()[2]
         if pending is None:
             return None
-        exact(pending, ("schema", "request", "protocol_time_ms"))
-        if pending["schema"] != "fairvenue-native-testnet-public-original-v1":
+        exact(pending, ("schema", "request"))
+        if pending["schema"] != PENDING_SCHEMA:
             fail()
-        request = pending["request"]
-        exact(request, ("intent", "intent_signature", "ordinary_signature", "generation_signature"))
-        intent = request["intent"]
-        exact(intent, ("schema", "expected", "agent_public_key", "nonce", "expires_at_ms", "action"))
-        context = {"authenticated":True, "session_scope":_scope(self._policy,self._grant),
-                   "owner":self._grant["owner"], "prefix":intent["expected"],
-                   "protocol_time_ms":pending["protocol_time_ms"]}
-        signables = build(self._policy,self._grant,context,
-                          {"nonce":intent["nonce"], "expiresAtMs":intent["expires_at_ms"], "action":intent["action"]}, self._crypto)
-        if signables["intent"] != intent:
+        # Locally re-authenticated: exact pins, this key and its own signature.
+        request = ts2.request_copy(pending["request"], self._pins, self._crypto)
+        material = self._grant["material"]
+        if (request["account_key"] != material["account_key"]
+                or request["agent_public_key"] != material["agent_public_key"]):
             fail("signature_invalid")
-        for signature, message in (("intent_signature","intent_signing_bytes"),
-                                   ("ordinary_signature","ordinary_signing_hash"),
-                                   ("generation_signature","generation_signing_bytes")):
-            if not self._crypto.verify(request[signature], bytes.fromhex(signables[message][2:]), self._grant["agentPublicKey"]):
-                fail("signature_invalid")
         return pending
 
     async def _operation(self, timeout_ms, work):
@@ -321,12 +338,13 @@ class NativeTestnetClient:
             return result
 
         async def post(path, value):
-            return _json(await bounded(lambda:self._post(path,_wire(value),min(15,deadline-time.monotonic()))))
+            data = await bounded(lambda:self._post(path,_wire(value),min(15,deadline-time.monotonic())))
+            return ts2.parse_json(data, 131072 if path == _INFO else 16384)
 
         async def sign(message):
-            raw = bytes.fromhex(message[2:])
-            signature = await bounded(lambda:self._signer.sign_bytes(raw))
-            if type(signature) is not bytes or not self._crypto.verify(encoded_hex(signature),raw,self._grant["agentPublicKey"]):
+            signature = await bounded(lambda:self._signer.sign_bytes(message))
+            agent = self._grant["material"]["agent_public_key"]
+            if type(signature) is not bytes or not self._crypto.verify(encoded_hex(signature),message,agent):
                 fail("signature_invalid")
             return encoded_hex(signature)
 
@@ -345,81 +363,105 @@ class NativeTestnetClient:
         finally:
             self._busy = False
 
-    async def _context(self, post, sign):
+    async def _context(self, post, sign, highest):
+        material = self._grant["material"]
         challenge = encoded_hex(secrets.token_bytes(32))
-        signature = await sign(encoded_hex(_signing_bytes(self._policy,self._grant["agentPublicKey"],challenge)))
-        result = await post("/v1/agent/context", {"schema":REQUEST_SCHEMA,"chain_id":421614,
-                            "settlement":_NATIVE_SETTLEMENT,"agent_public_key":self._grant["agentPublicKey"],
-                            "challenge":challenge,"signature":signature})
-        exact(result,("schema","status","challenge","context","public_grant","next_nonce",
-                      "proof_backed","l1_finality_verified","public_release_go"))
-        if (result["schema"] != RESPONSE_SCHEMA or result["status"] != "canonical_prepared_agent_context_not_final"
-                or result["challenge"] != challenge or grant_copy(result["public_grant"],self._policy,self._crypto) != self._grant
-                or any(result[key] is not False for key in ("proof_backed","l1_finality_verified","public_release_go"))):
-            fail("response_invalid")
-        context = context_copy(result["context"],self._policy,self._grant)
-        nonce = decimal(result["next_nonce"],safe=True)
-        now = int(context["protocol_time_ms"])
-        if context["session_scope"] != _scope(self._policy,self._grant) or now < self._time_floor or nonce < self._nonce_floor:
+        if challenge == "0x" + "00" * 32:
+            fail("unavailable")
+        signature = await sign(ts2.context_signing_bytes(self._pins, material["agent_public_key"], challenge))
+        reply = await post("/v1/agent/context", {"schema":ts2.CONTEXT_REQUEST_SCHEMA,
+                           "chain_id":self._pins["chain_id"],"settlement":self._pins["settlement"],
+                           "agent_public_key":material["agent_public_key"],"challenge":challenge,
+                           "signature":signature})
+        context, server_next = ts2.context_copy(reply, self._pins, self._grant, challenge)
+        # Never below a security command nonce this key already signed.
+        next_nonce = max(int(server_next), highest + 1)
+        if next_nonce > ts2.U64:
             fail("context_changed")
-        self._time_floor,self._nonce_floor = now,nonce
-        return {"context":copy.deepcopy(context),"next_nonce":result["next_nonce"],"public_grant":copy.deepcopy(self._grant)}
+        return {"context":context, "public_grant":copy.deepcopy(self._grant),
+                "next_nonce":str(next_nonce), "next_command_nonce":server_next}
 
     async def snapshot(self, *, timeout_ms=15000):
+        """Signed agent context: account fee mode, leverage, batch, admission, the
+        public grant and ``next_nonce`` (the next security command nonce). No order."""
         async def work(post,sign,check):
-            return await self._context(post,sign)
+            return await self._context(post,sign,self._custody.read()[1])
         return await self._operation(timeout_ms,work)
+
+    async def _rules(self, post, fresh):
+        """Tick and lot sizes of the pinned market; best prices only when fresh."""
+        if self._market is not None and not fresh:
+            return self._market
+        rules = ts2.market_rules(await post(_INFO,{"type":"native_market"}), self._pins)
+        if self._market is not None and (rules["tick_size"],rules["step_size"]) != (
+                self._market["tick_size"],self._market["step_size"]):
+            fail("context_changed")
+        self._market = {"tick_size":rules["tick_size"],"step_size":rules["step_size"],
+                        "best_bid":None,"best_ask":None}
+        return rules
+
+    async def market_rules(self, *, timeout_ms=15000):
+        """The public tick and lot sizes and best prices the SDK signs orders with."""
+        async def work(post,sign,check):
+            return await self._rules(post,True)
+        return await self._operation(timeout_ms,work)
+
+    def _ts2_action(self, chosen, nonce, expires, context, rules):
+        material = self._grant["material"]
+        kind = chosen["type"]
+        if kind == "place":
+            order = chosen["order"]
+            side = order["side"]
+            if order["order_type"] == "MARKET":
+                if order["price"] is None:
+                    opposite = rules["best_ask"] if side == "BUY" else rules["best_bid"]
+                    if opposite is None:
+                        fail("invalid_order")  # No opposite liquidity to bound against.
+                    ticks = ts2.protection_ticks(opposite, rules["tick_size"], side)
+                else:
+                    # A chosen bound rounds away from the book: never tighter than chosen.
+                    ticks = ts2.units(order["price"], rules["tick_size"],
+                                      "up" if side == "BUY" else "down")
+            else:
+                ticks = ts2.units(order["price"], rules["tick_size"])
+            return {"type":"order","delegation_nonce":material["nonce"],"client_nonce":_nonce(),
+                    "side":0 if side == "BUY" else 1,"kind":1 if order["order_type"] == "MARKET" else 0,
+                    "time_in_force":_TIME_IN_FORCE[order["time_in_force"]],
+                    "post_only":order["post_only"],"reduce_only":order["reduce_only"],
+                    "fee_mode":context["fee_mode"],"limit_price_ticks":ticks,
+                    "quantity_lots":ts2.units(order["quantity"], rules["step_size"]),
+                    "expires_at_ms":expires}
+        if kind == "cancel":
+            return {"type":"cancel","order_id":chosen["order_id"]}
+        if kind == "kill_all":
+            return {"type":"kill_all","client_nonce":_nonce()}
+        security = {"delegation_nonce":material["nonce"],"command_nonce":nonce,"expires_at_ms":expires}
+        if kind == "dead_man_switch":
+            return {"type":"set_dms",**security,"deadline_ms":chosen["deadline_ms"]}
+        if kind == "fee_mode":
+            return {"type":"set_fee_mode",**security,"fee_mode":0 if chosen["mode"] == "FIXED" else 1}
+        return {"type":"set_leverage",**security,"leverage":chosen["leverage"]}
 
     async def _recover(self, post):
         original = self._original()
         if original is None:
             fail("no_pending_request")
         request = original["request"]
-        result = await post("/v1/agent/recovery",{"signed_request":request})
-        voided = isinstance(result,dict) and result.get("status") == "not_settled"
-        exact(result,("schema","status","request_sha256","step","retry_authorized",
-                      "proof_backed","l1_finality_verified","public_release_go")
-              + (("settlement","voided_batch") if voided else ()))
-        expected = request["intent"]["expected"]
-        if (result["schema"] != "fairvenue-v1-agent-recovery-v1"
-                or result["request_sha256"] != encoded_hex(hashlib.sha256(_wire(request)).digest())
-                or integer(result["step"],511) != expected["head"]["count"]
-                or result["status"] not in ("accepted","rejected","unresolved","bound_incomplete","not_settled","not_admitted")
-                or any(result[key] is not False for key in ("retry_authorized","proof_backed","l1_finality_verified","public_release_go"))):
-            fail("response_invalid")
-        if voided:
-            # Terminal: exactly this original's own opening, voided by a later
-            # generation. It never settles and is never resent here. Any
-            # malformed binding raises here, before custody changes.
-            if result["settlement"] != "not_settled":
-                fail("response_invalid")
-            _voided_batch(result["voided_batch"], expected["opening"])
-        if result["status"] in ("accepted","rejected","not_settled","not_admitted"):
+        result = ts2.recovery_copy(await post("/v1/agent/recovery", request), request,
+                                   ts2.request_sha256(request))
+        if result["status"] in ts2.TERMINAL:
             revision,highest,stored = self._custody.read()
             if stored != original:
                 fail("context_changed")
-            nonce = decimal(request["intent"]["nonce"],safe=True)
-            if result["status"] in ("accepted","rejected"):
-                highest = max(highest,nonce)
-            elif voided:
-                # Only after the binding above fully validated: every request
-                # bound to the voided lineage is dead and the native nonce
-                # window rolls back with it; the server's window still refuses
-                # any nonce it has consumed.
-                highest = 0
-            # not_admitted: its own batch sealed without it, so the nonce was
-            # never consumed and stays available for a new request.
             self._custody.change(revision,highest,None)
-            if voided:
-                self._nonce_floor = 0
         return copy.deepcopy(result)
 
     async def recover_original(self, *, timeout_ms=15000):
-        """Exact original lookup only, even after expiry/revocation/new opening.
+        """Exact original lookup only, even after expiry/revocation/a new batch.
 
-        unresolved/bound_incomplete retain it; accepted/rejected and the terminal
-        not_admitted (its batch sealed without it) or not_settled (its batch was
-        voided) clear it. This method never sends admit.
+        ``accepted`` (journaled and applied), ``rejected`` (journaled native
+        rejection) and ``not_settled`` (its batch was voided, it never takes
+        effect) clear it. ``unresolved`` retains it. This method never sends admit.
         """
         async def work(post,sign,check):
             return await self._recover(post)
@@ -428,25 +470,16 @@ class NativeTestnetClient:
     def _not_placed(self, refusal, pending):
         """Definitive admit refusal of exactly the retained original.
 
-        Only an exact ``not_placed`` body (HTTP 409, or 429 for
-        ``rate_limited``) whose ``request_sha256`` is this original's digest
-        clears it, WITHOUT advancing ``highest``: the server proved nothing
-        was placed and the nonce was not consumed (also for ``nonce_stale``;
-        the next context decides). Raises ``AgentError(reason)``. Anything
-        else returns, keeping the original (``outcome_unknown``).
+        Only an exact ``not_placed`` body (HTTP 409, or 429 for ``rate_limited``)
+        whose ``request_sha256`` is this original's digest clears it. Raises
+        ``AgentError(reason)``. Anything else returns, keeping the original.
         """
         try:
-            result = _json(refusal.body)
-            exact(result,("error","reason","request_sha256","retry","proof_backed",
-                          "l1_finality_verified","public_release_go"))
+            value = ts2.parse_json(refusal.body)
         except AgentError:
             return
-        reason = result["reason"]
-        if (result["error"] != "not_placed" or type(reason) is not str or reason not in NOT_PLACED
-                or result["retry"] != NOT_PLACED[reason]
-                or refusal.status != (429 if reason == "rate_limited" else 409)
-                or result["request_sha256"] != encoded_hex(hashlib.sha256(_wire(pending["request"])).digest())
-                or any(result[key] is not False for key in ("proof_backed","l1_finality_verified","public_release_go"))):
+        reason = ts2.refusal_reason(value, refusal.status, ts2.request_sha256(pending["request"]))
+        if reason is None:
             return
         revision,highest,stored = self._custody.read()
         if stored != pending:
@@ -455,52 +488,67 @@ class NativeTestnetClient:
         fail(reason)
 
     async def run(self, input, *, timeout_ms=60000):
-        """One explicitly authorized native action; no automatic resend/reprice.
+        """One explicitly authorized TS2 action; no automatic resend or reprice.
 
-        A definitive ``not_placed`` admit refusal of the exact retained
-        original clears it (nonce not consumed) and raises ``AgentError`` with
-        its reason: ``batch_closed``, ``stale_context``, ``nonce_stale``,
-        ``intent_expired``, ``bad_signature``, ``unknown_agent``,
-        ``invalid_request`` (re-sign on a fresh context), ``rate_limited``
-        (the same or a re-signed request, shortly) or ``admission_closed``
-        (paused; later). Any other failure is ``outcome_unknown``: the
-        original stays retained until ``recover_original()`` resolves it.
+        ``input`` keeps its earlier shape ``{"nonce", "expiresAtMs", "action"}``:
+        ``nonce`` is ``snapshot()["next_nonce"]`` and ``expiresAtMs`` the signed
+        expiry (a resting order's lifetime, or a security command's deadline).
+        Actions: ``place`` (decimal price and quantity that must fit the market
+        tick and lot exactly, ``invalid_order`` otherwise), ``cancel`` (the 0x
+        TS2 order id), ``kill_all``, ``fee_mode``, ``leverage`` ("1".."100") and
+        ``dead_man_switch``. ``modify`` raises ``unsupported``: cancel and place
+        a new order. A definitive ``not_placed`` refusal clears the original and
+        raises ``AgentError`` with its reason: ``invalid_request``, ``rejected``,
+        ``admission_closed`` or ``rate_limited`` (sign a fresh request). Any
+        other failure is ``outcome_unknown``: the original stays retained until
+        ``recover_original()`` resolves it.
         """
         exact(input,("nonce","expiresAtMs","action"))
-        chosen = {"nonce":input["nonce"],"expiresAtMs":input["expiresAtMs"],"action":action_copy(input["action"])[0]}
-        decimal(chosen["nonce"],safe=True); decimal(chosen["expiresAtMs"],safe=True)
+        chosen = _ui_action(input["action"])
+        nonce = ts2.uint(input["nonce"],nonzero=True)
+        expires = ts2.uint(input["expiresAtMs"],nonzero=True)
         async def work(post,sign,check):
             if self._original() is not None:
                 fail("outcome_unknown")
             revision,highest,_ = self._custody.read()
-            if int(chosen["nonce"]) <= highest:
+            snapshot = await self._context(post,sign,highest)
+            if nonce != snapshot["next_nonce"]:
                 fail("nonce_reused")
-            original = await self._context(post,sign)
-            if chosen["nonce"] != original["next_nonce"]:
-                fail("nonce_reused")
-            signables = build(self._policy,self._grant,original["context"],chosen,self._crypto)
-            request = {"intent":signables["intent"],"intent_signature":await sign(signables["intent_signing_bytes"])}
-            # Pure existing validator does not enter AgentClient's closed run.
-            AgentClient._AgentClient__preparation(await post("/v1/agent/prepare",request),signables)
-            request["ordinary_signature"] = await sign(signables["ordinary_signing_hash"])
-            request["generation_signature"] = await sign(signables["generation_signing_bytes"])
-            fresh = await self._context(post,sign)
-            AgentClient._AgentClient__same(fresh["context"],original["context"])
-            if fresh["next_nonce"] != chosen["nonce"]:
-                fail("nonce_reused")
+            context, material = snapshot["context"], self._grant["material"]
+            kind = chosen["type"]
+            if kind in ("fee_mode","leverage") and context["account_settings_enabled"] is False:
+                fail("admission_closed")  # The server would refuse it. Nothing is signed.
+            if (kind not in ("cancel","kill_all")
+                    and not int(context["protocol_time_ms"]) < int(expires) <= int(material["expires_at_ms"])):
+                fail("context_changed")
+            rules = None
+            if kind == "place":
+                order = chosen["order"]
+                rules = await self._rules(post, order["order_type"] == "MARKET" and order["price"] is None)
+            action = self._ts2_action(chosen,nonce,expires,context,rules)
+            if not material["permissions"] & _RIGHTS[action["type"]]:
+                fail()
+            message, order_id = ts2.signing_message(self._pins,material["account_key"],
+                                                    material["agent_public_key"],action,self._crypto)
+            request = ts2.request_copy({"schema":ts2.REQUEST_SCHEMA,**self._pins,
+                                        "account_key":material["account_key"],
+                                        "agent_public_key":material["agent_public_key"],
+                                        "signature":await sign(message),"action":action},
+                                       self._pins,self._crypto)
             check()
-            pending = {"schema":"fairvenue-native-testnet-public-original-v1","request":request,
-                       "protocol_time_ms":original["context"]["protocol_time_ms"]}
-            self._custody.change(revision,highest,pending)
+            pending = {"schema":PENDING_SCHEMA,"request":request}
+            # A signed security nonce is never signed again, whatever its outcome.
+            floor = max(highest,int(nonce)) if action["type"] in ts2.SECURITY else highest
+            self._custody.change(revision,floor,pending)
             self._original()  # Read back and locally authenticate before send.
             try:
                 reply = await post("/v1/agent/admit",request)
             except AdmitRefusal as refusal:
                 self._not_placed(refusal,pending)
                 raise
-            ack = AgentClient._AgentClient__ack(reply,signables["intent"]["expected"],self._policy)
+            ack = ts2.ack_copy(reply,request,ts2.request_sha256(request),order_id)
             recovery = await self._recover(post)
-            if recovery["status"] not in ("accepted","rejected"):
+            if recovery["status"] not in ts2.TERMINAL:
                 fail("outcome_unknown")
             return {"ack":ack,"recovery":recovery}
         return await self._operation(timeout_ms,work)

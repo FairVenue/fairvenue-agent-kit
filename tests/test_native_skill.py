@@ -9,7 +9,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 NATIVE = ROOT / "skills/fairvenue/references/native-testnet.md"
-POLICY_SHA = "9a39af143e67f4675f05998bedbafb02a052819d23a2129674db8f8588938d4d"
+# The packaged TS2 deployment pins (arbitrum-sepolia-ts2.json).
+POLICY_SHA = "8a7cb56d98859cfb6e69b2416e4ae7eb3974a6a1012867bb7b1b205a2d1ab169"
 
 
 def test_native_skill_recipe_checks_independent_pins_then_signed_context_only(

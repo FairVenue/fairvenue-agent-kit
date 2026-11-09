@@ -1,6 +1,5 @@
-"""Offline public installation pins; synthetic keys only, no hosted acceptance."""
+"""Offline public TS2 installation pins; synthetic keys only, no hosted acceptance."""
 
-import copy
 import hashlib
 import json
 import os
@@ -9,113 +8,81 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from fairvenue_schema6 import AgentError, NativeTestnetClient, load_native_testnet_installation
+from fairvenue_schema6 import AgentError, NativeTestnetClient, load_native_testnet_installation, ts2
 from fairvenue_schema6 import installation as module
-from test_native_credentials import fixture, write
+from test_native_credentials import API_URL, fixture, write
 
 ROOT = Path(__file__).resolve().parents[1]
-PUBLIC = ROOT / "fairvenue_schema6/deployments/arbitrum-sepolia-1k.json"
-PUBLIC_SHA = "9a39af143e67f4675f05998bedbafb02a052819d23a2129674db8f8588938d4d"
+PUBLIC = ROOT / "fairvenue_schema6" / module.PACKAGED
+PUBLIC_SHA = "8a7cb56d98859cfb6e69b2416e4ae7eb3974a6a1012867bb7b1b205a2d1ab169"
 
 
 class InstallationTests(unittest.TestCase):
-    def document(self, policy, exported):
-        return {
-            "schema": "fairvenue-native-testnet-installation-v1",
-            **{
-                key: exported[key]
-                for key in (
-                    "environment",
-                    "settlement_mode",
-                    "chain_id",
-                    "settlement",
-                    "mock_token",
-                    "api_namespace",
-                    "api_url",
-                )
-            },
-            "agent_policy": policy,
-        }
+    def document(self, **changes):
+        return {"schema": module.SCHEMA, "environment": "TESTNET", **ts2.PINS,
+                "api_namespace": "/v1", "api_url": API_URL, **changes}
 
     def load(self, path, expected=None):
         return load_native_testnet_installation(
             path, expected_sha256=expected or hashlib.sha256(Path(path).read_bytes()).hexdigest()
         )
 
-    def test_published_policy_hash_pins_and_copy_isolation_without_http(self):
+    def test_published_pins_hash_and_copy_isolation_without_http(self):
         self.assertEqual(hashlib.sha256(PUBLIC.read_bytes()).hexdigest(), PUBLIC_SHA)
         with tempfile.TemporaryDirectory() as directory:
             path = write(directory, PUBLIC.read_bytes(), name="installation.json")
-            with patch(
-                "fairvenue_schema6.transport._http", side_effect=AssertionError("no network")
-            ):
+            with patch("fairvenue_schema6.transport._http", side_effect=AssertionError("no network")):
                 installed = self.load(path, PUBLIC_SHA)
             self.assertEqual(installed.api_url, "https://app.fairvenue.xyz/")
+            self.assertEqual(installed.policy, ts2.PINS)
+            self.assertEqual(installed.settlement, "0x3beb98f3ab27d3ac9595e28a3ca03e016fb2745b")
+            self.assertEqual(installed.config_hash,
+                             "0x6a72cb1998229bcd0d5ce8ea8bbeb0d6c294ee51a385f08208fe3439b58d8d91")
             policy = installed.policy
-            self.assertEqual(policy["epoch_ms"], "10")
-            self.assertEqual(policy["config_version"], "3")
-            policy["domain"]["chain_id"] = 1
-            self.assertEqual(installed.policy["domain"]["chain_id"], 421614)
-            self.assertNotIn("commitment", installed.policy)
+            policy["chain_id"] = 1
+            self.assertEqual(installed.policy["chain_id"], 421614)
+            self.assertNotIn("TESTNET public pins", repr(policy))
 
-    def test_export_and_independently_pinned_policy_construct_native_client_not_v0(self):
-        policy, exported = fixture()
+    def test_export_and_independently_pinned_installation_construct_the_ts2_client(self):
+        _, exported = fixture()
         with tempfile.TemporaryDirectory() as directory:
             key = write(directory, exported)
-            path = write(directory, self.document(policy, exported), name="installation.json")
-            installed = self.load(path)
+            installed = self.load(write(directory, self.document(), name="installation.json"))
             continuity = Path(directory).resolve() / "continuity"
             continuity.mkdir(mode=0o700)
-            with patch(
-                "fairvenue_schema6.transport._http", side_effect=AssertionError("no network")
-            ):
+            with patch("fairvenue_schema6.transport._http", side_effect=AssertionError("no network")):
                 client = NativeTestnetClient.from_credentials(
-                    key,
-                    policy=installed.policy,
-                    approved_api_url=installed.api_url,
-                    custody_path=str(continuity / "original.sqlite"),
-                    initialize=True,
+                    key, policy=installed.policy, approved_api_url=installed.api_url,
+                    custody_path=str(continuity / "original.sqlite"), initialize=True,
                 )
             try:
                 self.assertFalse(client.has_pending_request())
-                self.assertNotIn(exported["private_key_seed"], repr(installed))
+                self.assertEqual(client.settlement, ts2.SETTLEMENT)
+                self.assertNotIn(exported["private_key_seed"], repr(installed) + repr(client))
             finally:
                 client.close()
-            self.assertEqual(
-                Path(key).read_bytes(), json.dumps(exported, separators=(",", ":")).encode()
-            )
+            self.assertEqual(Path(key).read_bytes(), json.dumps(exported, separators=(",", ":")).encode())
 
-    def test_hash_domain_labels_private_fields_url_and_policy_reject(self):
-        policy, exported = fixture()
-        original = self.document(policy, exported)
+    def test_hash_domain_labels_private_fields_url_and_v4_pins_reject(self):
         changes = [
-            ("schema", "arena-key-v1"),
-            ("chain_id", 1),
-            ("chain_id", True),
-            ("environment", "PRODUCTION"),
-            ("settlement_mode", "virtual"),
-            ("settlement", "0x" + "0" * 40),
-            ("mock_token", "0x" + "1" * 40),
-            ("api_namespace", "/api/v1"),
-            ("api_url", "https://name:secret@host.example/"),
-            ("private_key_seed", "not allowed"),
+            {"schema": "fairvenue-native-testnet-installation-v1"},
+            {"chain_id": 1}, {"chain_id": True}, {"environment": "PRODUCTION"},
+            {"settlement": "0x" + "0" * 40}, {"settlement": "0xaaebec860fc2ec7f77379ac3c4b892266a76bcbf"},
+            {"config_hash": "0x" + "11" * 32}, {"api_namespace": "/api/v1"},
+            {"api_url": "https://name:secret@host.example/"}, {"private_key_seed": "not allowed"},
+            {"agent_policy": {}},
         ]
-        for field, value in changes:
-            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
-                path = write(directory, {**original, field: value}, name="installation.json")
+        for change in changes:
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                path = write(directory, self.document(**change), name="installation.json")
                 with self.assertRaises(AgentError) as caught:
                     self.load(path)
                 self.assertEqual(caught.exception.code, "invalid_input")
         with tempfile.TemporaryDirectory() as directory:
-            path = write(directory, original, name="installation.json")
+            path = write(directory, self.document(), name="installation.json")
             for expected in ["0" * 64, "f" * 64, "F" * 64, "", None]:
                 with self.subTest(hash=expected), self.assertRaises(AgentError):
                     load_native_testnet_installation(path, expected_sha256=expected)
-            changed = copy.deepcopy(original)
-            changed["agent_policy"]["domain"]["settlement"] = [1] * 20
-            other = write(directory, changed, name="foreign.json")
-            with self.assertRaises(AgentError):
-                self.load(other)
 
     def test_public_mode_symlink_hardlink_fifo_and_oversize_refuse(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -145,19 +112,16 @@ class InstallationTests(unittest.TestCase):
     def test_same_byte_replacement_during_validation_refuses_held_fd(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(write(directory, PUBLIC.read_bytes(), name="installation.json"))
-            validate = module.policy_copy
+            validate = module.ts2.pinned
 
-            def replace(value, crypto):
+            def replace(value):
                 raw = path.read_bytes()
                 path.unlink()
                 path.write_bytes(raw)
                 path.chmod(0o600)
-                return validate(value, crypto)
+                return validate(value)
 
-            with (
-                patch.object(module, "policy_copy", side_effect=replace),
-                self.assertRaises(AgentError),
-            ):
+            with patch.object(module.ts2, "pinned", side_effect=replace), self.assertRaises(AgentError):
                 self.load(str(path), PUBLIC_SHA)
 
 

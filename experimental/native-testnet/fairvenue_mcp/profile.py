@@ -1,9 +1,9 @@
 """Owner-private local profile: deployment pins, imported agent keys, continuity.
 
-Layout under ``FAIRVENUE_HOME`` (default ``~/.fairvenue/native-testnet``, 0700):
+Layout under ``FAIRVENUE_HOME`` (default ``~/.fairvenue/ts2-testnet``, 0700):
 
-- ``installation.json``: the reviewed public deployment pins (0600).
-- ``keys/<agent>-<delegation>.json``: imported downloaded agent keys (0600).
+- ``installation.json``: the reviewed public TS2 deployment pins (0600).
+- ``keys/<agent>-<delegation>.json``: imported downloaded TS2 bot keys (0600).
 - ``continuity/<agent>-<delegation>/original.sqlite``: the SDK's exact-original
   custody, one namespace per key. Never delete it: it may hold the only copy of
   a signed request whose outcome is still unknown.
@@ -11,7 +11,8 @@ Layout under ``FAIRVENUE_HOME`` (default ``~/.fairvenue/native-testnet``, 0700):
 - ``journal.jsonl``: public summaries of this server's own actions.
 
 Key files are read here and by the SDK only. Their seed never leaves this
-process: no tool returns, logs or journals it.
+process: no tool returns, logs or journals it. A retired V4 key file is refused
+by name ("TS2: create a new bot key"), never converted.
 """
 
 from __future__ import annotations
@@ -37,20 +38,27 @@ from fairvenue_schema6 import (
     NativeTestnetInstallation,
     load_native_testnet_agent_key,
     load_native_testnet_installation,
+    ts2,
 )
 
 from .config import PACKAGED_INSTALLATION_SHA256, Config
 from .market import utc
 
-NATIVE_KEY_SCHEMA = "fairvenue-native-testnet-agent-v1"
+NATIVE_KEY_SCHEMA = ts2.KEY_SCHEMA
+V4_KEY_SCHEMA = ts2.V4_KEY_SCHEMA
+V4_INSTALLATION_SCHEMA = "fairvenue-native-testnet-installation-v1"
+PACKAGED_PINS = "deployments/arbitrum-sepolia-ts2.json"
 KEY_SETUP_PATH = "?setup=api-key#native-agent-key"
 MAX_KEY_BYTES = 16_384
 STATE_SCHEMA = "fairvenue-mcp-state-v1"
+NEW_KEY = "TS2: create a new bot key."
+PREVIOUS_DEPLOYMENT = (
+    "This key belongs to a previous testnet deployment. Create a new key for the current one."
+)
 PERMISSION_BITS = (
-    (1, "place, fee mode and leverage"),
-    (2, "cancel"),
-    (4, "modify"),
-    (8, "dead man's switch"),
+    (ts2.TRADE, "orders, fee mode and leverage"),
+    (ts2.CANCEL, "cancel and cancel all"),
+    (ts2.DEAD_MAN_SWITCH, "dead man's switch"),
 )
 CRYPTO_PROBLEM = (
     "The pinned crypto packages (PyNaCl 1.6.2, pycryptodome 3.24.0, cffi 2.1.1, pycparser 3.0) "
@@ -183,12 +191,19 @@ def write_state(config: Config, state: dict[str, Any]) -> None:
 
 
 def packaged_installation() -> bytes:
-    data = files("fairvenue_schema6").joinpath("deployments/arbitrum-sepolia-1k.json").read_bytes()
+    data = files("fairvenue_schema6").joinpath(PACKAGED_PINS).read_bytes()
     if hashlib.sha256(data).hexdigest() != PACKAGED_INSTALLATION_SHA256:
         raise SetupError(
             "The packaged deployment pins do not match their reviewed hash. Reinstall the kit."
         )
     return data
+
+
+def _v4_installation(path: Path) -> bool:
+    try:
+        return bool(json.loads(_read_regular(path)).get("schema") == V4_INSTALLATION_SCHEMA)
+    except (SetupError, OSError, ValueError, AttributeError):
+        return False
 
 
 def load_installation(config: Config) -> NativeTestnetInstallation:
@@ -203,6 +218,12 @@ def load_installation(config: Config) -> NativeTestnetInstallation:
             str(path), expected_sha256=config.installation_sha256
         )
     except AgentError:
+        if _v4_installation(path):
+            raise SetupError(
+                f"{path} holds the pins of the retired V4 testnet. This server speaks TS2 and "
+                "needs a fresh profile: unset FAIRVENUE_HOME and FAIRVENUE_INSTALLATION_FILE to "
+                "use the default ~/.fairvenue/ts2-testnet. Keep the old directory as it is."
+            ) from None
         raise SetupError(
             crypto_problem()
             or f"{path} failed verification. It must be the reviewed pin file with SHA256 "
@@ -232,14 +253,15 @@ def install_pins(config: Config) -> dict[str, Any]:
 
 
 def pins_view(config: Config, installed: NativeTestnetInstallation) -> dict[str, Any]:
-    pins = json.loads(config.installation_file.read_bytes())
+    pins = installed.policy
     return {
         "file": str(config.installation_file),
         "sha256": installed.sha256,
+        "protocol": "TS2",
         "api_url": installed.api_url,
-        "chain_id": pins.get("chain_id"),
-        "settlement": pins.get("settlement"),
-        "mock_token": pins.get("mock_token"),
+        "chain_id": pins["chain_id"],
+        "settlement": pins["settlement"],
+        "config_hash": pins["config_hash"],
         "key_setup_url": installed.api_url + KEY_SETUP_PATH,
     }
 
@@ -255,14 +277,22 @@ def _milliseconds(value: object) -> int | None:
     return None
 
 
+def _material(grant: object) -> dict[str, Any]:
+    """The delegation material of a TS2 grant ``{material, signature}``, or ``{}``."""
+    material = grant.get("material") if isinstance(grant, dict) else None
+    return material if isinstance(material, dict) else {}
+
+
 def _grant_view(grant: dict[str, Any]) -> dict[str, Any]:
+    """Public fields of a TS2 grant. Never the internal account number."""
+    material = _material(grant)
     issued, expires = (
-        _milliseconds(grant.get("issuedAtMs")),
-        _milliseconds(grant.get("expiresAtMs")),
+        _milliseconds(material.get("issued_at_ms")),
+        _milliseconds(material.get("expires_at_ms")),
     )
-    permissions = grant.get("permissions")
-    key = grant.get("agentPublicKey")
-    owner = grant.get("owner")
+    permissions = material.get("permissions")
+    key = material.get("agent_public_key")
+    owner = material.get("owner")
     return {
         "agent_public_key": key if isinstance(key, str) and _AGENT_KEY.fullmatch(key) else None,
         "owner": owner if isinstance(owner, str) and len(owner) <= 42 else None,
@@ -286,30 +316,35 @@ def describe_key(data: bytes, installed: NativeTestnetInstallation | None) -> di
         return {"kind": "not_json"}
     if not isinstance(value, dict):
         return {"kind": "not_json"}
+    if value.get("schema") == V4_KEY_SCHEMA:
+        return {"kind": "v4", "note": NEW_KEY}
     if value.get("schema") != NATIVE_KEY_SCHEMA:
         return {
             "kind": "not_native",
-            "note": "Not a native TESTNET agent key (legacy V0 keys are not accepted).",
+            "note": "Not a TS2 bot key (V0 and V4 keys are not accepted). " + NEW_KEY,
         }
-    grant = value.get("public_grant")
+    grant = value.get("delegation")
+
+    def text(key: str) -> str | None:
+        item = value.get(key)
+        return item if isinstance(item, str) and len(item) <= 80 else None
+
     view: dict[str, Any] = {
         "kind": "native_testnet",
-        "settlement": value.get("settlement") if isinstance(value.get("settlement"), str) else None,
-        "api_url": value.get("api_url") if isinstance(value.get("api_url"), str) else None,
+        "settlement": text("settlement"),
+        "config_hash": text("config_hash"),
+        "api_url": text("api_url"),
         **(_grant_view(grant) if isinstance(grant, dict) else {}),
     }
     if installed is not None:
-        pins = installed.policy
-        settlement = "0x" + bytes(pins["domain"]["settlement"]).hex()
         current = (
-            value.get("settlement") == settlement and value.get("api_url") == installed.api_url
+            value.get("settlement") == installed.settlement
+            and value.get("config_hash") == installed.config_hash
+            and value.get("api_url") == installed.api_url
         )
         view["matches_installed_deployment"] = current
         if not current:
-            view["note"] = (
-                "This key belongs to another deployment (for example a previous testnet season). "
-                "Create a new key for the current deployment."
-            )
+            view["note"] = PREVIOUS_DEPLOYMENT
     return view
 
 
@@ -393,7 +428,8 @@ def fresh_download(config: Config, since: float) -> str | None:
 
 def _key_name(grant: dict[str, Any]) -> tuple[str, str]:
     """``(key file name, continuity namespace)`` for a validated public grant."""
-    key, nonce = grant.get("agentPublicKey"), grant.get("delegationNonce")
+    material = _material(grant)
+    key, nonce = material.get("agent_public_key"), material.get("nonce")
     if (
         not isinstance(key, str)
         or not _AGENT_KEY.fullmatch(key)
@@ -414,11 +450,13 @@ def import_key(config: Config, source: str, *, remove_source: bool = False) -> d
     path = Path(os.path.normpath(os.path.abspath(os.path.expanduser(source))))
     data = _read_regular(path)
     view = describe_key(data, installed)
+    if view["kind"] == "v4":
+        raise SetupError(f"{path} is a V4 key, which cannot sign on TS2. {NEW_KEY}")
     if view["kind"] != "native_testnet":
-        raise SetupError(f"{path} is not a native TESTNET agent key.")
+        raise SetupError(f"{path} is not a TS2 bot key. {NEW_KEY}")
     if not view.get("matches_installed_deployment"):
         raise SetupError(view.get("note", "This key does not match the installed deployment."))
-    grant = json.loads(data).get("public_grant")
+    grant = json.loads(data).get("delegation")
     if not isinstance(grant, dict):
         raise SetupError(f"{path} has no valid public grant. Create a new key.")
     name, namespace = _key_name(grant)
@@ -452,7 +490,7 @@ def import_key(config: Config, source: str, *, remove_source: bool = False) -> d
             target.unlink()
             raise SetupError(
                 crypto_problem()
-                or "The key failed local verification (its seed, grant or policy do not match). "
+                or "The key failed local verification (its seed, grant or pins do not match). "
                 "Create a fresh key for the current deployment."
             ) from None
     state = read_state(config)
@@ -518,10 +556,14 @@ def load_key(installed: NativeTestnetInstallation, path: Path) -> tuple[Any, dic
         signer, grant = load_native_testnet_agent_key(
             str(path), policy=installed.policy, approved_api_url=installed.api_url
         )
-    except AgentError:
+    except AgentError as error:
+        if error.code == "v4_key":
+            raise SetupError(f"{path} is a V4 key. {NEW_KEY}") from None
+        if error.code == "previous_deployment":
+            raise SetupError(f"{path}: {PREVIOUS_DEPLOYMENT}") from None
         raise SetupError(
             crypto_problem()
-            or f"{path} failed verification: it must be a native TESTNET key for the installed "
+            or f"{path} failed verification. It must be a TS2 bot key for the installed "
             "deployment, owned by you with mode 0600 or 0400, and not a symlink."
         ) from None
     _key_name(grant)
@@ -553,7 +595,7 @@ def key_for_namespace(config: Config, namespace: str) -> Path | None:
 
 def namespace_of_file(path: Path) -> str | None:
     try:
-        grant = json.loads(_read_regular(path)).get("public_grant")
+        grant = json.loads(_read_regular(path)).get("delegation")
         return _key_name(grant)[1] if isinstance(grant, dict) else None
     except (SetupError, OSError, ValueError):
         return None
@@ -612,7 +654,7 @@ def record_continuity(config: Config, custody: Path, grant: dict[str, Any]) -> N
     state = read_state(config)
     state["continuity"][custody.parent.name] = {
         "initialized_at": _now(),
-        "agent_public_key": grant["agentPublicKey"],
+        "agent_public_key": grant["material"]["agent_public_key"],
     }
     write_state(config, state)
 
@@ -652,12 +694,16 @@ def pending_original(custody: Path) -> dict[str, Any] | None:
         raise ValueError("custody without its singleton row")
     if row[0] is None:
         return None
-    intent = json.loads(row[0])["request"]["intent"]
+    request = json.loads(row[0])["request"]
+    action = request["action"]
+    if not isinstance(action, dict) or not isinstance(action.get("type"), str):
+        raise ValueError("custody with an unexpected original")
+    # Public action fields only. The signature and account word stay in custody.
     return {
-        "nonce": str(intent["nonce"]),
-        "expires_at": safe_utc(_milliseconds(intent["expires_at_ms"])),
-        "batch": str(intent["expected"]["opening"]["batch"]),
-        "action": intent["action"],
+        "action": {key: value for key, value in action.items() if key != "delegation_nonce"},
+        "nonce": action.get("command_nonce") or action.get("client_nonce"),
+        "expires_at": safe_utc(_milliseconds(action.get("expires_at_ms"))),
+        "request_sha256": ts2.request_sha256(request),
     }
 
 

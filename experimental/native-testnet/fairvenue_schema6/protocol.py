@@ -23,6 +23,16 @@ NOT_PLACED = {
 }
 
 
+# Fixed public explanations of TS2 codes that a user must act on. Every other
+# code keeps the generic content-free message.
+_MESSAGES = {
+    "v4_key": "TS2: create a new bot key.",
+    "previous_deployment": "This key belongs to a previous testnet deployment. Create a new key.",
+    "unsupported": "Order changes are not available. Cancel the order and place a new one.",
+    "invalid_order": "Not sent. Use a price and amount that fit the market tick and lot size.",
+}
+
+
 class AgentError(Exception):
     """Content-free failures; never include a key, request or upstream error."""
 
@@ -31,8 +41,10 @@ class AgentError(Exception):
             "invalid_input", "crypto_unavailable", "context_changed", "signature_invalid",
             "activation_closed", "busy", "deadline", "unavailable", "response_invalid",
             "outcome_unknown", "no_pending_request", "nonce_reused", *NOT_PLACED,
+            "rejected", *_MESSAGES,
         ) else "unavailable"
-        super().__init__("Agent request refused; retain any pending signed request before retrying.")
+        super().__init__(_MESSAGES.get(
+            self.code, "Agent request refused. Keep any pending signed request before retrying."))
 
 
 class AdmitRefusal(AgentError):
