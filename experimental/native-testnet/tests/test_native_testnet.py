@@ -88,6 +88,9 @@ class NativeFixture:
         self.lost_reply = False
         self.refusal = None  # request -> (status, body); status None is an unknown failure.
         self.recovery_status = None  # Overrides the journal-derived status.
+        # A not_placed lookup always names its reason (service.rs
+        # validate_ts2_agent_reply): rejected or expired_never_admitted.
+        self.recovery_reason = "rejected"
         self.recovery_edit = self.context_edit = self.ack_edit = None
         self.market = market(self)
 
@@ -111,8 +114,10 @@ class NativeFixture:
                          receipt={"digest": "0x" + "ab" * 32, "signature": "0x" + "cd" * 65},
                          certificates=[])
         elif kind in ("cancel", "kill_all"):
-            reply["receipt"] = {"digest": "0x" + "ab" * 32, "signature": "0x" + "cd" * 65,
-                                "kill_seq": "1", "position": position,
+            # Fill-only proving (season 2): the matcher and journal enforce the
+            # cancel, so no kill receipt is signed and kill_seq is 0.
+            reply["receipt"] = {"digest": None, "signature": None, "kill_seq": "0",
+                                "position": position,
                                 "order_id": action.get("order_id", "0x" + "00" * 32)}
         else:
             reply["position"] = position
@@ -172,6 +177,8 @@ class NativeFixture:
         reply = {"schema": ts2.RECOVERY_SCHEMA, "request_sha256": digest, "status": status,
                  "action": request["action"]["type"], "lineage": "1", "retry_authorized": False,
                  "proofVerified": False, "publicFinality": False, "publicReleaseGo": False}
+        if status == "not_placed":
+            reply["reason"] = self.recovery_reason
         if self.recovery_edit:
             self.recovery_edit(reply)
         return body(reply)
@@ -225,6 +232,12 @@ class NativeTestnetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot["context"]["admission"], {"open": True, "reasons": []})
         self.assertEqual(snapshot["public_grant"], self.fixture.grant)
         self.assertEqual(self.fixture.calls["admit"], 0)
+        # Closed admission names one readiness reason, for example the funding hold.
+        for reason in ("funding_owed", "chain_observation_expired", "oracle_stale"):
+            self.fixture.context["admission"] = {"open": False, "reasons": [reason]}
+            closed = (await self.client.snapshot())["context"]["admission"]
+            self.assertEqual(closed, {"open": False, "reasons": [reason]})
+        self.fixture.context["admission"] = {"open": True, "reasons": []}
         for edit in (lambda r: r.update(challenge="0x" + "11" * 32),
                      lambda r: r["public_grant"]["material"].update(nonce="2"),
                      lambda r: r["context"].update(config_hash="0x" + "11" * 32),
@@ -404,7 +417,12 @@ class NativeTestnetTests(unittest.IsolatedAsyncioTestCase):
         edits = (None, lambda r: r.update(request_sha256="0x" + "11" * 32),
                  lambda r: r.update(retry_authorized=True), lambda r: r.update(proofVerified=True),
                  lambda r: r.update(status="final"), lambda r: r.update(action="cancel"),
-                 lambda r: r.update(proof_backed=False), lambda r: r.update(private_key_seed=SEED))
+                 lambda r: r.update(proof_backed=False), lambda r: r.update(private_key_seed=SEED),
+                 # A reason only ever comes with not_placed, and not_placed always has one.
+                 lambda r: r.update(reason="rejected"), lambda r: r.update(reason=None),
+                 lambda r: r.update(status="not_placed"),
+                 lambda r: r.update(status="not_placed", reason=None),
+                 lambda r: r.update(status="not_placed", reason="timeout"))
         for edit in edits:
             self.fixture.recovery_edit = edit
             with self.subTest(edit=edit):
@@ -417,17 +435,21 @@ class NativeTestnetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.fixture.calls["admit"], 1)
 
     async def test_terminal_lookups_clear_exactly_the_original(self):
-        for status, outcome in (("not_placed", "rejected"), ("not_settled", "not_settled"),
-                                ("operator_journaled", "accepted")):
+        for status, reason, outcome in (
+                ("not_placed", "rejected", "rejected"),
+                ("not_placed", "expired_never_admitted", "not_placed"),
+                ("not_settled", None, "not_settled"), ("operator_journaled", None, "accepted")):
             self.fixture.lost_reply = True
             with self.assertRaises(AgentError):
                 await self.run_action(self.fixture.order())
             self.fixture.lost_reply = False
             self.fixture.recovery_status = status
+            self.fixture.recovery_reason = reason
             result = await self.client.recover_original()
-            self.assertEqual((result["status"], result["wire_status"]), (outcome, status))
+            self.assertEqual((result["status"], result["wire_status"], result["reason"]),
+                             (outcome, status, reason))
             self.assertFalse(self.client.has_pending_request())
-            self.fixture.recovery_status = None
+            self.fixture.recovery_status, self.fixture.recovery_reason = None, "rejected"
 
     async def test_definitive_not_placed_refusals_clear_only_their_exact_original(self):
         for reason in ts2.NOT_PLACED:

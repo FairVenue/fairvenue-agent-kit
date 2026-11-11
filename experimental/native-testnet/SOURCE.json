@@ -1,7 +1,7 @@
 {
   "schema": "fairvenue-native-testnet-source-parity-v1",
   "status": "experimental-release-preparation-not-hosted-acceptance",
-  "source": "FairVenue verifiable-testnet/onboarding/python (operator-managed testnet source, 2026-11-10; TS2 wire, settlement 0x3beb98f3ab27d3ac9595e28a3ca03e016fb2745b, config hash 0x6a72cb1998229bcd0d5ce8ea8bbeb0d6c294ee51a385f08208fe3439b58d8d91; live release acceptance pending)",
+  "source": "FairVenue verifiable-testnet/onboarding/python (operator-managed testnet source, 2026-11-11; TS2 wire, season 2 settlement 0xfd5e17a1a722e0890669aa8c71a024ea4e4277bd, config hash 0x416ca6d7eeae85857f387b55e829052eb6474065874774f299e09c0484364bbd; recovery not_placed reasons; live release acceptance pending)",
   "public_base_commit": "7de5e93fc823d264e69f58291dbb5ab1257fce73",
   "byte_identical": [
     {
@@ -26,7 +26,7 @@
     },
     {
       "path": "fairvenue_schema6/deployments/arbitrum-sepolia-ts2.json",
-      "sha256": "8a7cb56d98859cfb6e69b2416e4ae7eb3974a6a1012867bb7b1b205a2d1ab169"
+      "sha256": "ba25da81e3ebc9f6679a184993dbc4a64fd089684f54e174e8ad654b725232d4"
     },
     {
       "path": "fairvenue_schema6/installation.py",
@@ -38,7 +38,7 @@
     },
     {
       "path": "fairvenue_schema6/native_testnet.py",
-      "sha256": "954a1b358061096ec4a901e7339e7f82585a857308ba06adebd571d13ccd418d"
+      "sha256": "b11e308653cc2142d27fa1f3a761304e88a0f78cfd9fe40497e3b2c45593f8f2"
     },
     {
       "path": "fairvenue_schema6/protocol.py",
@@ -50,7 +50,7 @@
     },
     {
       "path": "fairvenue_schema6/ts2.py",
-      "sha256": "6a527d4e07bd700278a1f019d08856590cc6b300f9a612713c66ce19f41dc416"
+      "sha256": "cef7ccf24fd26a8185f2491d205d3b6f3d7b913e38047f12867d5b3c2504650f"
     },
     {
       "path": "tests/fixtures/agent-commands.golden.json",
@@ -70,15 +70,15 @@
     },
     {
       "path": "tests/test_installation.py",
-      "sha256": "22c3ef799df5c1db9773ef187f3004d7d16e99bbddab7af1e62b7ff257b4a92a"
+      "sha256": "d9493f3d3d9603f5f962fca03b4a3154105c3fee75eb2b24336352d11d23e389"
     },
     {
       "path": "tests/test_native_credentials.py",
-      "sha256": "f71abcf56179222647643a87d1784faf3ec2dd62ffb46ecee8f4ca340bed206d"
+      "sha256": "6d5d25a23d1a580acb6afc436b15adc18fd0a3ccc188ef2ae2e04181d92b572a"
     },
     {
       "path": "tests/test_native_testnet.py",
-      "sha256": "11ac29e79b8e9b8ddd6e5aa8edfe6989ca0bac3938e5e8da0ff0ffa549300add"
+      "sha256": "9a33baf6084b71f9f18bef34fe69aa71a6f97f57218afc20496c2c2f29147184"
     },
     {
       "path": "tests/test_ts2_codec.py",
@@ -88,7 +88,7 @@
   "public_extensions": [
     {
       "path": "pyproject.toml",
-      "sha256": "19e393006ad29535462b1e9203d2770b5db79e005a9231fa9f2ceefc1888fd6a"
+      "sha256": "f49e23318b8b1cb03549e00f523cfa6faa892829807b10ba8cfacd797b0b7bcf"
     }
   ],
   "tests": "TS2 tests are byte-identical copies of the source tests: shared JS/Rust vector parity (order ids, signing messages, signatures, request_sha256), TS2 key files (V4 refused by name), installation pins and the client against a synthetic TS2 server. The source-closed schema6 suites test_agent.py and test_context.py are copied with package-local vector paths. The fixtures are byte-identical to verifiable-testnet/trade-settlement/fixtures and onboarding/web.",

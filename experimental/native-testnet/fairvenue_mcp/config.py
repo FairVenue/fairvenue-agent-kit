@@ -18,12 +18,14 @@ from pathlib import Path
 #: for the same deployment (for example another approved API origin): the SDK
 #: hard-codes the TS2 settlement and config hash, so a new deployment needs an
 #: updated kit.
-PACKAGED_INSTALLATION_SHA256 = "8a7cb56d98859cfb6e69b2416e4ae7eb3974a6a1012867bb7b1b205a2d1ab169"
+PACKAGED_INSTALLATION_SHA256 = "ba25da81e3ebc9f6679a184993dbc4a64fd089684f54e174e8ad654b725232d4"
 
-#: A fresh profile for TS2. The retired V4 profile (``LEGACY_V4_HOME``) is never
-#: read, changed or deleted: its keys and pending originals cannot act on TS2.
-DEFAULT_HOME = "~/.fairvenue/ts2-testnet"
+#: A fresh profile for TS2 season 2. Retired profiles are never read, changed or
+#: deleted: their keys and pending originals cannot act on season 2.
+DEFAULT_HOME = "~/.fairvenue/ts2-season2"
 LEGACY_V4_HOME = "~/.fairvenue/native-testnet"
+#: The TS2 season 1 profile (settlement 0x3beb98f3…) of kit 0.3.0.
+TS2_SEASON1_HOME = "~/.fairvenue/ts2-testnet"
 DEFAULT_DOWNLOAD_DIRS = ("~/Downloads",)
 
 DEFAULT_MAX_ORDER_QUANTITY = Decimal("0.01")

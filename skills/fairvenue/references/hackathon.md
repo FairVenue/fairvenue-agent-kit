@@ -44,10 +44,10 @@ $1,005 in total, paid in crypto. The hackathon runs only with 50+ participants.
 
 - Check that their trades will count: a fresh bot key from the setup page, not the browser
   terminal key.
-- The testnet now runs TS2. Bot keys made before the upgrade no longer sign and are refused with
-  "TS2: create a new bot key". Every participant creates a new key with **Create API key &
-  download JSON** and updates the MCP server or the native SDK to the TS2 version. Tool names,
-  arguments and the SDK calls stay the same.
+- The testnet now runs TS2 season 2. Bot keys from season 1 or the older V4 testnet no longer
+  sign. Every participant creates a new key with **Create API key & download JSON** and updates
+  the MCP server or the native SDK to version 0.3.1 or later. Tool names, arguments and the SDK
+  calls stay the same.
 - Pick one trading prize to target. Maker and taker volume both need PnL above zero and a Sharpe
   ratio above 1 on the day, so size risk for steady hourly returns rather than one large bet.
 - Plan to cover every UTC hour of each scoring day, which usually means a standalone bot rather

@@ -1,6 +1,6 @@
 """Owner-private local profile: deployment pins, imported agent keys, continuity.
 
-Layout under ``FAIRVENUE_HOME`` (default ``~/.fairvenue/ts2-testnet``, 0700):
+Layout under ``FAIRVENUE_HOME`` (default ``~/.fairvenue/ts2-season2``, 0700):
 
 - ``installation.json``: the reviewed public TS2 deployment pins (0600).
 - ``keys/<agent>-<delegation>.json``: imported downloaded TS2 bot keys (0600).
@@ -41,12 +41,13 @@ from fairvenue_schema6 import (
     ts2,
 )
 
-from .config import PACKAGED_INSTALLATION_SHA256, Config
+from .config import DEFAULT_HOME, PACKAGED_INSTALLATION_SHA256, Config
 from .market import utc
 
 NATIVE_KEY_SCHEMA = ts2.KEY_SCHEMA
 V4_KEY_SCHEMA = ts2.V4_KEY_SCHEMA
 V4_INSTALLATION_SCHEMA = "fairvenue-native-testnet-installation-v1"
+TS2_INSTALLATION_SCHEMA = "fairvenue-ts2-testnet-installation-v1"
 PACKAGED_PINS = "deployments/arbitrum-sepolia-ts2.json"
 KEY_SETUP_PATH = "?setup=api-key#native-agent-key"
 MAX_KEY_BYTES = 16_384
@@ -199,11 +200,20 @@ def packaged_installation() -> bytes:
     return data
 
 
-def _v4_installation(path: Path) -> bool:
+def _retired_installation(path: Path) -> str | None:
+    """Which retired testnet a pin file belongs to, or None."""
     try:
-        return bool(json.loads(_read_regular(path)).get("schema") == V4_INSTALLATION_SCHEMA)
+        value = json.loads(_read_regular(path))
+        if value.get("schema") == V4_INSTALLATION_SCHEMA:
+            return "the retired V4 testnet"
+        if value.get("schema") == TS2_INSTALLATION_SCHEMA and value.get("settlement") not in (
+            None,
+            ts2.SETTLEMENT,
+        ):
+            return "an earlier TS2 season"
     except (SetupError, OSError, ValueError, AttributeError):
-        return False
+        pass
+    return None
 
 
 def load_installation(config: Config) -> NativeTestnetInstallation:
@@ -218,11 +228,13 @@ def load_installation(config: Config) -> NativeTestnetInstallation:
             str(path), expected_sha256=config.installation_sha256
         )
     except AgentError:
-        if _v4_installation(path):
+        retired = _retired_installation(path)
+        if retired is not None:
             raise SetupError(
-                f"{path} holds the pins of the retired V4 testnet. This server speaks TS2 and "
-                "needs a fresh profile: unset FAIRVENUE_HOME and FAIRVENUE_INSTALLATION_FILE to "
-                "use the default ~/.fairvenue/ts2-testnet. Keep the old directory as it is."
+                f"{path} holds the pins of {retired}. This server speaks "
+                "TS2 season 2 and needs a fresh profile: unset FAIRVENUE_HOME and "
+                f"FAIRVENUE_INSTALLATION_FILE to use the default {DEFAULT_HOME}. Keep the old "
+                "directory as it is."
             ) from None
         raise SetupError(
             crypto_problem()

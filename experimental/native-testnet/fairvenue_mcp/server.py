@@ -383,7 +383,6 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
         side: Side,
         quantity: Quantity,
         price: Price,
-        consent: OrderConsent,
         time_in_force: TimeInForce = "GTC",
         post_only: PostOnly = False,
         reduce_only: ReduceOnly = False,
@@ -392,8 +391,8 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
         """Not available on TS2: it always refuses and signs nothing.
 
         Cancel the order with cancel_order and place a new one with place_order.
+        It never shows the trading dialog, because it can never sign.
         """
-        apply_consent(consent)
         return await run(
             lambda t: t.modify(
                 order_id=order_id,
@@ -495,9 +494,9 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
 
         Works for any key, including an expired one, and returns the original's
         public action. Only queries the exact retained original and never resends
-        it. accepted, rejected and not_settled resolve it. unresolved and
-        still_unknown mean try again later. nothing_pending means no request is
-        waiting.
+        it. accepted, rejected, not_placed (never journaled and expired) and
+        not_settled resolve it. unresolved and still_unknown mean try again later.
+        nothing_pending means no request is waiting.
         """
         return await run(lambda t: t.recover())
 
@@ -509,8 +508,8 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
     ) -> dict[str, Any]:
         """This server's own submitted requests and outcomes, newest last.
 
-        The agent's memory, including the order IDs of its orders. Bot keys cannot
-        read fills or balances through this server.
+        The agent's memory, including the order IDs of its orders. This server does
+        not read fills or balances.
         """
         return await local(lambda t: {"entries": t.journal.tail(limit)})
 

@@ -11,12 +11,13 @@ Clone `https://github.com/FairVenue/fairvenue-agent-kit` into an appropriate too
 the reviewed commit and install it in the project's Python 3.11+ virtual environment. For example,
 from that checkout: `python -m pip install -e .`. No PyPI release is advertised.
 
-For hosted access, give the user [Create an Arena API key](https://app.fairvenue.xyz/?setup=api-key)
-and ask them to click **Create & download API key**. Use an operator-provided local/staging origin
-instead when applicable. Older deployments keep **System → Create API key → Download JSON**.
-The user signs in first if necessary. The browser generates the
-key; the server receives only its public half. Move the file outside source control to an
-owner-only location (`0600` on Linux/macOS). No private key belongs in the conversation.
+For access, give the user the key setup page of the operator-provided V0 Arena origin
+(`<origin>/?setup=api-key`) and ask them to click **Create & download API key**. Older deployments
+keep **System → Create API key → Download JSON**. The hosted `app.fairvenue.xyz` Arena now runs
+the native TESTNET. Its key page creates native TESTNET bot keys, which this V0 SDK cannot use.
+The user signs in first if necessary. The browser generates the key. The server receives only
+its public half. Move the file outside source control to an owner-only location (`0600` on
+Linux/macOS). No private key belongs in the conversation.
 
 For an already running isolated local backend only, explicit account-creation authorization
 permits `fairvenue init-local --base-url http://127.0.0.1:8088 --credentials .fairvenue/testnet.json`.

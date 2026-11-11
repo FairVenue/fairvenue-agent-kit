@@ -26,7 +26,7 @@ from typing import Any
 from fairvenue_schema6 import AgentError, HttpTransport, NativeTestnetClient, ts2
 
 from . import __version__, profile
-from .config import LEGACY_V4_HOME, Config, Limits
+from .config import LEGACY_V4_HOME, TS2_SEASON1_HOME, Config, Limits
 from .journal import Journal
 from .market import (
     SYMBOL,
@@ -59,10 +59,10 @@ RECENT_DOWNLOAD_SECONDS = 1_800
 REOPEN_PAGE_SECONDS = 600
 
 ACCOUNT_VISIBILITY = (
-    "Bot keys cannot read balances, positions or fills through this server. place_order "
-    "returns each order's order_id, which cancel_order takes. Use get_journal for what this "
-    "server submitted, get_market for public trades, and ask the user to check the Arena "
-    "terminal for balances and positions."
+    "This server does not read balances, positions or fills. place_order returns each "
+    "order's order_id, which cancel_order takes. Use get_journal for what this server "
+    "submitted, get_market for public trades, and ask the user to check the Arena terminal "
+    "for balances and positions."
 )
 TRADING_FORCED_OFF = (
     "Trading is switched off in this MCP server's configuration (FAIRVENUE_TRADING=off). "
@@ -113,6 +113,8 @@ FAILURE_GUIDANCE = {
 RECOVERY_MEANINGS = {
     "accepted": "The exchange journaled it (soft, operator-trusted). The original is cleared.",
     "rejected": "The exchange refused it. Nothing executed. The original is cleared.",
+    "not_placed": "It never reached the exchange journal and its expiry has passed, so it can "
+    "never execute. Nothing executed. The original is cleared.",
     "not_settled": "Its batch was voided. It never takes effect. The original is cleared.",
     "unresolved": "Still unknown. The original stays retained. Check again later.",
 }
@@ -410,13 +412,20 @@ class Trader:
             "home": str(self.config.home),
             "trading": self.limits_view(),
         }
-        legacy = Path(os.path.expanduser(LEGACY_V4_HOME))
-        if legacy != self.config.home and legacy.is_dir():
-            status["previous_testnet_profile"] = {
-                "path": str(legacy),
-                "note": "The retired V4 testnet profile is kept untouched. Its keys cannot sign "
-                "on TS2 and its requests cannot be recovered here. Create a new bot key.",
+        retired = [
+            {
+                "path": str(path),
+                "note": f"The retired {name} profile is kept untouched. Its keys cannot sign on "
+                "TS2 season 2 and its requests cannot be recovered here. Create a new bot key.",
             }
+            for name, path in (
+                ("V4 testnet", Path(os.path.expanduser(LEGACY_V4_HOME))),
+                ("TS2 season 1", Path(os.path.expanduser(TS2_SEASON1_HOME))),
+            )
+            if path != self.config.home and path.is_dir()
+        ]
+        if retired:
+            status["previous_testnet_profiles"] = retired
         try:
             waiting = profile.pending_originals(self.config)
         except SetupError as problem:
@@ -530,9 +539,10 @@ class Trader:
                 "link": setup_url,
                 "browser_opened": opened,
                 "say_to_user": f"{where} Sign in with Google if asked, then click Create API key "
-                "& download JSON. The button turns on once your 1,000 test USDC have arrived. I "
-                "pick the key up automatically from your Downloads folder. Keys from before the "
-                "TS2 upgrade no longer work, so create a new one.",
+                "& download JSON. The button turns on as soon as your account has its 1,000 test "
+                "USDC, usually right after sign-in. I pick the key up automatically from your "
+                "Downloads folder. Keys from an earlier testnet season no longer work, so create "
+                "a new one.",
                 "next": "Call connect_account again to keep waiting. If the user saved the file "
                 "elsewhere, use find_agent_key_downloads with that folder, then import_agent_key.",
             }
@@ -701,8 +711,8 @@ class Trader:
             raise ToolProblem("side must be BUY or SELL.")
         if time_in_force not in ("GTC", "IOC"):
             raise ToolProblem(
-                "time_in_force must be GTC or IOC. There are no market or FOK orders here: use a "
-                "price-protected IOC limit order to take liquidity."
+                "time_in_force must be GTC or IOC. This server sends no market or FOK orders. Use "
+                "a price-protected IOC limit order to take liquidity."
             )
         if post_only and time_in_force != "GTC":
             raise ToolProblem("post_only orders must be GTC so they can rest on the book.")
@@ -961,6 +971,8 @@ class Trader:
             )
         elif status == "rejected":
             outcome["meaning"] = "The exchange refused this command. Nothing executed."
+        elif status == "not_placed":
+            outcome["meaning"] = "It never reached the exchange journal and can never execute."
         else:
             outcome["meaning"] = "Its batch was voided. It never takes effect."
         return outcome

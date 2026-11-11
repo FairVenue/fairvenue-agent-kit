@@ -66,8 +66,10 @@ transaction projection before reporting the result.
 
 ## Hosted access
 
-Use the Arena URL provided with your access. Do not call `init-local`, reset or faucet against a
-hosted testnet. Sign in to Arena, open
+Use the V0 Arena URL provided with your access. The public `app.fairvenue.xyz` Arena now runs the
+native TESTNET, and its keys work only with [`experimental/native-testnet`](../experimental/native-testnet/README.md)
+and the [MCP server](MCP.md), not with this SDK. Do not call `init-local`, reset or faucet against
+a hosted testnet. Sign in to the V0 Arena, open
 **System**, choose **Create API key**, and download the JSON once. FairVenue stores only the
 public key. Move the file to an encrypted owner-only location, apply `chmod 600 <file>` on Linux or
 macOS, and run `fairvenue verify` before starting a strategy.

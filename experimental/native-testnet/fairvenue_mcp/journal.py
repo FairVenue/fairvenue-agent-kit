@@ -1,8 +1,8 @@
 """Append-only local journal of this server's own actions.
 
-Bot keys cannot read their account (balance, positions, open orders, fills)
-through the API, so this journal is the agent's memory of what it submitted
-and how each request ended. It holds public action fields and outcome codes
+This server does not read the account (balance, positions, open orders,
+fills), so this journal is the agent's memory of what it submitted and how
+each request ended. It holds public action fields and outcome codes
 only: never seeds, signatures, signed envelopes or upstream error text.
 """
 

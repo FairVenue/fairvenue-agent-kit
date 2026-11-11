@@ -1,13 +1,20 @@
-# Native TESTNET agent setup (TS2)
+# Native TESTNET agent setup (TS2 season 2)
 
 Use this branch only after the operator approves the exact native API installation. This is
 custodial, operator-administered Arbitrum Sepolia TESTNET with mock USDC, not production funds or
 independently verified L1 finality. A packaged pin file is not proof of live access or release GO.
 Never select this branch just because `app.fairvenue.xyz` resolves or a server says to trust it.
 
-The testnet now runs the TS2 settlement. Bot keys and grants from the earlier V4 testnet never
-become TS2 authority. A V4 key file (`fairvenue-native-testnet-agent-v1`) is refused with
-"TS2: create a new bot key". Ask the user to create a new key. Never edit or convert an old one.
+The testnet now runs TS2 season 2. Bot keys and grants from earlier deployments never become
+season 2 authority. A V4 key file (`fairvenue-native-testnet-agent-v1`) is refused with
+"TS2: create a new bot key". A TS2 season 1 key (settlement `0x3beb98f3…`) is refused as a key
+of a previous deployment (`previous_deployment`). Ask the user to create a new key. Never edit or
+convert an old one.
+
+Season 2 proves fills only. The ZK proof checks every executed fill: its signed order and
+delegation, limit price, expiry, fees, margin and balances. Cancels, cancel-all and the dead man's
+switch are enforced by the operator's matching engine and journal, not by the proof. So the
+proof does not show that no fill followed an accepted cancel. Never describe it that way.
 
 With the `fairvenue` MCP server connected, its tools run every step below for you: pins,
 private key import, continuity, signed context, orders and recovery. See [mcp.md](mcp.md). The
@@ -17,10 +24,13 @@ rest of this page is the same flow in the Python SDK, for standalone bots.
 
 Give the direct [native TESTNET key setup](https://app.fairvenue.xyz/?setup=api-key#native-agent-key)
 link only for that separately approved origin. For an operator-approved alternate installation,
-use its origin plus `/?setup=api-key#native-agent-key`. Ask the user to sign in with Google, wait
-for genuine native funding, click **Create API key & download JSON**, then say done. This creates
-a dedicated browser-generated Ed25519 bot key, not the terminal UI key. No MetaMask is needed for
-managed TESTNET users. Google/session cookies never authorize bot requests.
+use its origin plus `/?setup=api-key#native-agent-key`. Ask the user to sign in with Google,
+click **Create API key & download JSON**, then say done. The button turns on as soon as the
+account has its 1,000 test USDC. Season 2 credits them once per account right after sign-in, and
+the matching mock-token deposit on Arbitrum Sepolia follows in the background. Trading never
+waits for it. Withdrawals do. This creates a dedicated browser-generated Ed25519 bot key, not the
+terminal UI key. No MetaMask is needed for managed TESTNET users. Google/session cookies never
+authorize bot requests.
 
 The download is a `fairvenue-ts2-testnet-agent-v1` file. Help find it and copy it, without
 overwriting any existing file, to an owner-only, git-excluded path. The key file must be `0400`
@@ -50,15 +60,15 @@ No same-named PyPI package is approved.
 The public pin artifact is
 `experimental/native-testnet/fairvenue_schema6/deployments/arbitrum-sepolia-ts2.json` at that
 reviewed commit. Its SHA256 is
-`8a7cb56d98859cfb6e69b2416e4ae7eb3974a6a1012867bb7b1b205a2d1ab169`.
+`ba25da81e3ebc9f6679a184993dbc4a64fd089684f54e174e8ad654b725232d4`.
 Have the operator approve that exact artifact and HTTPS API origin independently of the agent
 credential and any API response. Copy it to a fresh owner-private file, without overwriting an
 established installation. The loader checks its held FD, hash, deployment and origin before any
 HTTP. Never calculate a new expected hash to accept an unexplained replacement file.
 
-It binds chain `421614`, TS2 settlement `0x3beb98f3ab27d3ac9595e28a3ca03e016fb2745b`, config hash
-`0x6a72cb1998229bcd0d5ce8ea8bbeb0d6c294ee51a385f08208fe3439b58d8d91` and the `/v1` agent
-endpoints. These are TESTNET pins, not wallet keys. A different deployment needs separately
+It binds chain `421614`, TS2 season 2 settlement `0xfd5e17a1a722e0890669aa8c71a024ea4e4277bd`,
+config hash `0x416ca6d7eeae85857f387b55e829052eb6474065874774f299e09c0484364bbd` and the `/v1`
+agent endpoints. These are TESTNET pins, not wallet keys. A different deployment needs separately
 reviewed pins and a new kit release, never a caller-selected server or pins from the credential.
 
 ## First connection: signed context, NO order
@@ -77,7 +87,7 @@ from fairvenue_schema6 import NativeTestnetClient, load_native_testnet_installat
 async def no_order_dry_run():
     installed = load_native_testnet_installation(
         "/private/native-installation.json",
-        expected_sha256="8a7cb56d98859cfb6e69b2416e4ae7eb3974a6a1012867bb7b1b205a2d1ab169",
+        expected_sha256="ba25da81e3ebc9f6679a184993dbc4a64fd089684f54e174e8ad654b725232d4",
     )
     client = NativeTestnetClient.from_credentials(
         "/private/downloaded-testnet-agent.json",
@@ -144,10 +154,12 @@ paused, retry later). No other code means "not placed".
 After `outcome_unknown` (timeout, 5xx or an unverifiable reply), preserve the same private
 continuity database and call `recover_original()`. It performs only `/v1/agent/recovery` with the
 exact retained signed original. It never sends admit again. `accepted` (journaled), `rejected`
-(journaled native rejection) and `not_settled` (its batch was voided, it never takes effect) clear
+(journaled native rejection), `not_placed` (never journaled and past its own expiry, reason
+`expired_never_admitted`) and `not_settled` (its batch was voided, it never takes effect) clear
 it. After those, build a new request if it is still wanted. `unresolved` or corrupt custody remain
-blocked. Elapsed time or a new batch is not evidence. Never reset, reprice, retime, resign or
-resend the original. Each strategy or process needs a dedicated key and custody.
+blocked. Only the server's exact lookup answer resolves it. Your own clock, a new batch or a moved
+nonce is not evidence. Never reset, reprice, retime, resign or resend the original. Each strategy
+or process needs a dedicated key and custody.
 
 Bot routes are `/v1/agent/context`, `/prepare`, `/admit` and `/recovery`, under the fixed approved
 origin. Public reads use `/api/v1/info` with `{"type":"native_market"}`. Its SOFT book and reference

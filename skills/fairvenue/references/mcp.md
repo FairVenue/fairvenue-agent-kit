@@ -5,10 +5,13 @@ user's bot key. It never returns a seed, asks the user in a dialog before it sig
 follows the exact-original recovery rules in [native-testnet.md](native-testnet.md). The user
 only clicks: once in the browser to create a key and once in the dialog to allow trading.
 
-Since version 0.3.0 the server speaks the TS2 testnet. The tool names and arguments are the same
-as before. Bot keys made before TS2 are refused with "TS2: create a new bot key", so the user
-creates a new key once. The server keeps its TS2 profile in `~/.fairvenue/ts2-testnet` and never
-touches the old `~/.fairvenue/native-testnet` profile.
+Version 0.3.1 speaks TS2 season 2. Version 0.3.0 still points at season 1 and can no longer
+connect, so ask the user to update the plugin or `uvx` command and restart the client. The tool
+names and arguments are the same as before. Bot keys from season 1 or the V4 testnet are refused,
+so the user creates a new key once. The server keeps its season 2 profile in
+`~/.fairvenue/ts2-season2` and never touches the old `~/.fairvenue/ts2-testnet` (season 1) or
+`~/.fairvenue/native-testnet` (V4) profiles. Season 2 proves fills only. Cancels, cancel-all and
+the dead man's switch are enforced by the operator's matching engine, not by the proof.
 
 ## Install it
 

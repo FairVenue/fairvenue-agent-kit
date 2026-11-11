@@ -12,13 +12,16 @@ credentials to an external venue.
 Status: early testnet tooling, not a live trading service. Pin a reviewed commit before relying on
 it. This repository does not include the FairVenue backend or grant hosted access.
 
-**TS2 upgrade (version 0.3.0).** The native TESTNET now runs the TS2 settlement. The MCP server
-and the native SDK speak TS2 from version 0.3.0. Tool names, tool arguments and the SDK calls are
-unchanged. Bot keys made before the upgrade no longer sign. They are refused with
-"TS2: create a new bot key", so create a new key once with **Create API key & download JSON**.
-Then update the plugin (or the `uvx` command) and restart your agent's client. Orders must now
-use whole ticks and steps, accepted orders return their `order_id` for `cancel_order`, and order
-modify is gone: cancel and place a new order. See [docs/MCP.md](docs/MCP.md).
+**TS2 season 2 (version 0.3.1).** The native TESTNET now runs TS2 season 2, a fresh deployment
+with new pins. The MCP server and the native SDK speak it from version 0.3.1. Version 0.3.0 still
+points at season 1 and can no longer connect. Tool names, tool arguments and the SDK calls are
+unchanged. Bot keys from season 1 and the older V4 testnet no longer sign, so create a new key
+once with **Create API key & download JSON**. Your account gets 1,000 test USDC once in season 2,
+right after sign-in. Then update the plugin (or the `uvx` command) and restart your agent's
+client. Season 2 proves fills only. Cancels, cancel-all and the dead man's switch are enforced by
+the operator's matching engine, not by the proof. Since 0.3.0, orders use whole ticks and steps,
+accepted orders return their `order_id` for `cancel_order`, and there is no order modify: cancel
+and place a new order. See [docs/MCP.md](docs/MCP.md).
 
 ## Start with your coding agent
 
@@ -77,24 +80,27 @@ Scoring days are **November 16, 17 and 18, 2026 (UTC)**. Each day is scored sepa
 rankings within those days decide the winners. It runs only with 50+ participants. Only API
 trades count: trades signed with a bot
 key from **Create API key & download JSON**, including trades your agent signs through the MCP
-server. Keys made before the TS2 upgrade no longer sign, so create a new one. Full rules: [fairvenue.xyz/hackathon/rules](https://fairvenue.xyz/hackathon/rules) and
+server. Keys from before TS2 season 2 no longer sign, so create a new one. Full rules: [fairvenue.xyz/hackathon/rules](https://fairvenue.xyz/hackathon/rules) and
 [skills/fairvenue/references/hackathon.md](skills/fairvenue/references/hackathon.md). Bug reports
 and testnet analyses go in a GitHub issue titled `[Hackathon bug]` or `[Hackathon analysis]`.
 
 ## Native TESTNET SDK
 
 [`experimental/native-testnet`](experimental/native-testnet/README.md) provides
-`fairvenue_schema6.NativeTestnetClient` for standalone bots: independently reviewed TS2
+`fairvenue_schema6.NativeTestnetClient` for standalone bots: independently reviewed TS2 season 2
 deployment pins, a downloaded TS2 bot key (`fairvenue-ts2-testnet-agent-v1`), a no-order dry run
 and exact-original recovery. Its signing bytes, order ids and request digests match the shared
 TS2 JS and Rust vectors. The MCP server is an optional extra of the same package
-(`fairvenue-schema6-agent[mcp]`). The native package does not accept V0 or V4 credentials and
-does not establish hosted funding, liquidity, proof verification or release readiness.
+(`fairvenue-schema6-agent[mcp]`). The native package does not accept V0, V4 or TS2 season 1
+credentials and does not establish hosted funding, liquidity, proof verification or release
+readiness.
 
 ## Legacy virtual Arena SDK
 
 Everything below is the root `fairvenue` package for the legacy virtual-settlement Arena. Do not
-use it, its keys or its endpoints for the native TESTNET.
+use it, its keys or its endpoints for the native TESTNET. The hosted `app.fairvenue.xyz` Arena now
+runs the native TESTNET, so this SDK needs a local or operator-provided V0 backend. Keys from the
+hosted key page are native TESTNET bot keys, which this SDK cannot use.
 
 ### Install
 
@@ -122,8 +128,9 @@ fairvenue verify --credentials .fairvenue/testnet.json
 ```
 
 `init-local` refuses remote hosts, refuses to overwrite an existing file, and writes credentials
-with mode `0600`. It never prints the private key. Hosted testnet users create a separate bot agent
-credential from Arena's **System** panel and must not call local reset/faucet endpoints.
+with mode `0600`. It never prints the private key. Users of an operator-provided V0 Arena create a
+separate bot agent credential from its **System** panel and must not call local reset/faucet
+endpoints.
 
 ### Read public market data
 

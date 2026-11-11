@@ -460,8 +460,11 @@ class NativeTestnetClient:
         """Exact original lookup only, even after expiry/revocation/a new batch.
 
         ``accepted`` (journaled and applied), ``rejected`` (journaled native
-        rejection) and ``not_settled`` (its batch was voided, it never takes
-        effect) clear it. ``unresolved`` retains it. This method never sends admit.
+        rejection), ``not_placed`` (never journaled and past its own expiry, so
+        nothing can admit it any more) and ``not_settled`` (its batch was voided,
+        it never takes effect) clear it. ``unresolved`` retains it. The result's
+        ``reason`` is the server's fixed ``not_placed`` reason, else None. This
+        method never sends admit.
         """
         async def work(post,sign,check):
             return await self._recover(post)

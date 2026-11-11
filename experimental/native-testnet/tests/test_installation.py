@@ -14,7 +14,10 @@ from test_native_credentials import API_URL, fixture, write
 
 ROOT = Path(__file__).resolve().parents[1]
 PUBLIC = ROOT / "fairvenue_schema6" / module.PACKAGED
-PUBLIC_SHA = "8a7cb56d98859cfb6e69b2416e4ae7eb3974a6a1012867bb7b1b205a2d1ab169"
+PUBLIC_SHA = "ba25da81e3ebc9f6679a184993dbc4a64fd089684f54e174e8ad654b725232d4"
+#: TS2 season 1, now another deployment: its pins never install.
+SEASON1 = {"settlement": "0x3beb98f3ab27d3ac9595e28a3ca03e016fb2745b",
+           "config_hash": "0x6a72cb1998229bcd0d5ce8ea8bbeb0d6c294ee51a385f08208fe3439b58d8d91"}
 
 
 class InstallationTests(unittest.TestCase):
@@ -35,9 +38,9 @@ class InstallationTests(unittest.TestCase):
                 installed = self.load(path, PUBLIC_SHA)
             self.assertEqual(installed.api_url, "https://app.fairvenue.xyz/")
             self.assertEqual(installed.policy, ts2.PINS)
-            self.assertEqual(installed.settlement, "0x3beb98f3ab27d3ac9595e28a3ca03e016fb2745b")
+            self.assertEqual(installed.settlement, "0xfd5e17a1a722e0890669aa8c71a024ea4e4277bd")
             self.assertEqual(installed.config_hash,
-                             "0x6a72cb1998229bcd0d5ce8ea8bbeb0d6c294ee51a385f08208fe3439b58d8d91")
+                             "0x416ca6d7eeae85857f387b55e829052eb6474065874774f299e09c0484364bbd")
             policy = installed.policy
             policy["chain_id"] = 1
             self.assertEqual(installed.policy["chain_id"], 421614)
@@ -68,6 +71,7 @@ class InstallationTests(unittest.TestCase):
             {"schema": "fairvenue-native-testnet-installation-v1"},
             {"chain_id": 1}, {"chain_id": True}, {"environment": "PRODUCTION"},
             {"settlement": "0x" + "0" * 40}, {"settlement": "0xaaebec860fc2ec7f77379ac3c4b892266a76bcbf"},
+            SEASON1, {"settlement": SEASON1["settlement"]}, {"config_hash": SEASON1["config_hash"]},
             {"config_hash": "0x" + "11" * 32}, {"api_namespace": "/api/v1"},
             {"api_url": "https://name:secret@host.example/"}, {"private_key_seed": "not allowed"},
             {"agent_policy": {}},

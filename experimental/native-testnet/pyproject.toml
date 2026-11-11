@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fairvenue-schema6-agent"
-version = "0.3.0"
-description = "Explicit operator-managed TS2 native TESTNET agent client, separate from virtual Arena"
+version = "0.3.1"
+description = "Explicit operator-managed TS2 season 2 native TESTNET agent client, separate from virtual Arena"
 readme = "README.md"
 authors = [{name = "FairVenue"}]
 requires-python = ">=3.11"

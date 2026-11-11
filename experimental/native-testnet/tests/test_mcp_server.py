@@ -349,6 +349,23 @@ class McpTraderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.fixture.calls["admit"], 1)  # Recovery never resends.
         self.assertEqual((await restarted.recover())["status"], "nothing_pending")
 
+    async def test_an_expired_never_admitted_original_resolves_and_unblocks(self) -> None:
+        trader = await self.ready()
+        self.fixture.refusal = lambda request: (None, None)  # 503: nothing journaled.
+        unknown = await trader.place(dry_run=False, **{**ORDER, "time_in_force": "IOC"})
+        self.assertEqual(unknown["status"], "outcome_unknown")
+        self.fixture.refusal = None
+        self.assertEqual((await trader.recover())["status"], "unresolved")
+        # The server's real lookup answer once the original's own expiry has passed.
+        self.fixture.recovery_status = "not_placed"
+        self.fixture.recovery_reason = "expired_never_admitted"
+        recovered = await trader.recover()
+        self.assertEqual((recovered["status"], recovered["resolved"]), ("not_placed", True))
+        self.assertIn("can never execute", recovered["meaning"])
+        self.fixture.recovery_status, self.fixture.recovery_reason = None, "rejected"
+        self.assertEqual((await trader.place(dry_run=False, **ORDER))["status"], "accepted")
+        self.assertEqual(self.fixture.calls["admit"], 2)  # The original was never resent.
+
     async def test_definitive_refusals_and_terminal_outcomes_need_no_recovery(self) -> None:
         trader = await self.ready()
         order = {**ORDER, "side": "SELL", "price": "80001", "post_only": True}
@@ -408,22 +425,36 @@ class McpTraderTests(unittest.IsolatedAsyncioTestCase):
             await restarted.verify()
         self.assertFalse(custody.exists())
 
-    async def test_a_retired_v4_profile_is_named_and_never_used(self) -> None:
-        legacy = self.profile.root / "legacy"
+    async def test_retired_v4_and_season1_profiles_are_named_and_never_used(self) -> None:
+        legacy, season1 = self.profile.root / "legacy", self.profile.root / "season1"
         legacy.mkdir()
+        season1.mkdir()
         trader = self.profile.trader()
         self.addCleanup(trader.close)
-        with patch.object(trading_module, "LEGACY_V4_HOME", str(legacy)):
+        with (
+            patch.object(trading_module, "LEGACY_V4_HOME", str(legacy)),
+            patch.object(trading_module, "TS2_SEASON1_HOME", str(season1)),
+        ):
             status = await trader.setup_status()
-        self.assertIn("V4", status["previous_testnet_profile"]["note"])
-        old = self.profile.root / "old-home"
-        old.mkdir(mode=0o700)
-        pins = old / "installation.json"
-        pins.write_text(json.dumps({"schema": profile_module.V4_INSTALLATION_SCHEMA}))
-        pins.chmod(0o600)
-        with self.assertRaisesRegex(SetupError, "retired V4 testnet"):
-            profile_module.load_installation(load_config({"FAIRVENUE_HOME": str(old)}))
-        self.assertTrue(pins.exists())
+        notes = [item["note"] for item in status["previous_testnet_profiles"]]
+        self.assertIn("V4", notes[0])
+        self.assertIn("TS2 season 1", notes[1])
+        for name, document, message in (
+            ("old-v4", {"schema": profile_module.V4_INSTALLATION_SCHEMA}, "retired V4 testnet"),
+            (
+                "old-season1",
+                pins_document(settlement="0x3beb98f3ab27d3ac9595e28a3ca03e016fb2745b"),
+                "an earlier TS2 season",
+            ),
+        ):
+            old = self.profile.root / name
+            old.mkdir(mode=0o700)
+            pins = old / "installation.json"
+            pins.write_text(json.dumps(document))
+            pins.chmod(0o600)
+            with self.assertRaisesRegex(SetupError, message):
+                profile_module.load_installation(load_config({"FAIRVENUE_HOME": str(old)}))
+            self.assertTrue(pins.exists())  # Never changed or deleted.
 
 
 class McpReviewRegressionTests(unittest.IsolatedAsyncioTestCase):
@@ -777,13 +808,21 @@ class McpProtocolTests(unittest.IsolatedAsyncioTestCase):
         trader = self.trader("ask")
         trader.import_key(str(trader.config.download_dirs[0] / "fairvenue-TESTNET-agent.json"))
 
+        asked: list[str] = []
+
         async def user_declines(context: Any, params: Any) -> ElicitResult:
+            asked.append(params.message)
             return ElicitResult(action="decline")
 
         async with (
             asyncio.timeout(60),
             Client(create_server(trader), elicitation_callback=user_declines) as client,
         ):
+            # modify_order can never sign, so it never asks the user to allow trading.
+            modify = await client.call_tool("modify_order", {**self.order, "order_id": ORDER_ID})
+            self.assertTrue(modify.is_error)
+            self.assertIn("Cancel the order", modify.content[0].text)
+            self.assertEqual(asked, [])
             declined = await client.call_tool("place_order", self.order)
             self.assertTrue(declined.is_error)
             self.assertIn("did not allow trading", declined.content[0].text)
@@ -800,7 +839,8 @@ class McpConfigAndMarketTests(unittest.TestCase):
         config = load_config({"FAIRVENUE_HOME": "/tmp/x/../fairvenue"})
         self.assertEqual(str(config.home), "/tmp/fairvenue")
         self.assertEqual(config.trading_mode, "ask")
-        self.assertTrue(str(load_config({}).home).endswith(".fairvenue/ts2-testnet"))
+        # A fresh season 2 profile. The season 1 profile (ts2-testnet) is never reused.
+        self.assertTrue(str(load_config({}).home).endswith(".fairvenue/ts2-season2"))
         self.assertEqual(load_config({"FAIRVENUE_TRADING": "on"}).trading_mode, "on")
         self.assertEqual(load_config({"FAIRVENUE_TRADING": "off"}).trading_mode, "off")
         self.assertEqual(str(config.limits.max_order_notional), "1000")

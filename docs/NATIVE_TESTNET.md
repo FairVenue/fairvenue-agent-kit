@@ -5,8 +5,9 @@ and exact-original recovery guide are in
 [experimental/native-testnet](../experimental/native-testnet/README.md).
 
 From version 0.3.0 the client speaks the TS2 testnet with the same calls as before.
-It accepts only TS2 bot keys (`fairvenue-ts2-testnet-agent-v1`). A V4 key file is
-refused with "TS2: create a new bot key".
+Version 0.3.1 pins TS2 season 2. It accepts only season 2 TS2 bot keys
+(`fairvenue-ts2-testnet-agent-v1`). A V4 key file is refused with "TS2: create a new
+bot key" and a TS2 season 1 key as a key of a previous deployment.
 
 Coding agents can use the same client through the optional MCP server: setup,
 market data, signed orders within user-set limits and recovery. See

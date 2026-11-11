@@ -11,7 +11,7 @@ KEY_SETUP_URL = "https://app.fairvenue.xyz/?setup=api-key#native-agent-key"
 RULES_URL = "https://fairvenue.xyz/hackathon/rules"
 
 INSTRUCTIONS = f"""\
-FairVenue native TESTNET tools: build and run a trading agent on the TS2 testnet on Arbitrum \
+FairVenue native TESTNET tools: build and run a trading agent on TS2 season 2 on Arbitrum \
 Sepolia with mock tokens. No real funds, no mainnet and no external venue.
 
 Connecting takes one tool: call connect_account and pass its say_to_user text on to the user. \
@@ -23,20 +23,23 @@ connect_account again. Never ask the user to say done, paste a key or move a fil
 Rules:
 - Never ask for, open or display a key file. This server reads keys locally and never returns \
 the seed.
-- Bot keys made before the TS2 upgrade no longer work. They are refused with "TS2: create a new \
-bot key". The user creates a new one on the key page.
+- Bot keys from an earlier testnet season (V4 or TS2 season 1) no longer work. They are refused \
+as a key of a previous deployment, or with "TS2: create a new bot key". The user creates a new \
+one on the key page.
 - The first signed action of a session shows the user a one-click dialog to allow trading, \
 with limits. If the client cannot show it, the user sets FAIRVENUE_TRADING=on. dry_run=true \
 previews an order without signing. Respect the limits instead of working around them.
-- Orders are LIMIT only: GTC (optionally post_only) or a price-protected IOC. Prices and sizes \
-are decimal strings that must fit the tick and step sizes from get_market exactly. Nothing is \
-rounded. There is no order modify: cancel and place a new order.
+- This server sends LIMIT orders only: GTC (optionally post_only) or a price-protected IOC. \
+Prices and sizes are decimal strings that must fit the tick and step sizes from get_market \
+exactly. Nothing is rounded. There is no order modify: cancel and place a new order.
 - "accepted" means the exchange journaled the command in soft, operator-trusted state. It is \
-not a fill report, a proof or L1 finality. An accepted order comes with its order_id.
+not a fill report, a proof or L1 finality. An accepted order comes with its order_id. Season 2 \
+proves fills only. Cancels, cancel-all and the dead man's switch are enforced by the operator's \
+matching engine, not by the proof.
 - "not_placed", "not_executed" and "failed" mean nothing happened, so a new request is safe. \
 "outcome_unknown" means call recover_pending_request and never send the same order again until \
 it resolves. "blocked" means some key still has such a request: recover it first.
-- Bot keys cannot read balances, positions or fills here. Use get_journal (it keeps the order \
+- This server does not read balances, positions or fills. Use get_journal (it keeps the order \
 IDs this server placed), the public trades in get_market, or ask the user to check the Arena \
 terminal.
 - Public reads and signed calls share global rate limits with every participant. Prefer \
@@ -50,8 +53,10 @@ Background: get_guide with topic overview, setup, trading, recovery, hackathon o
 GUIDES: dict[str, str] = {
     "overview": """\
 FairVenue is a fee-solution preview. Its native TESTNET is an operator-run exchange simulation \
-on Arbitrum Sepolia with mock USDC, running the TS2 settlement. Each new account gets one \
-genuine 1,000 test USDC starter deposit. Nothing here is real money.
+on Arbitrum Sepolia with mock USDC, running TS2 season 2. Each account gets 1,000 test USDC \
+once per season. They are credited at once, so trading starts right away, and the matching \
+mock-token deposit on Arbitrum Sepolia follows in the background. Withdrawals wait until that \
+deposit is final. Nothing here is real money.
 
 - Market: BTCUSDC with leverage, positions and margin against a native order book. External \
 reference prices only inform reference liquidity. No order is ever routed to another venue.
@@ -63,16 +68,21 @@ publishing earlier batches never pauses trading. A batch can be voided, and then
 never settle.
 - Soft state: every reply is operator-trusted until its batch settles. Each public trade in \
 get_market shows its settlement state.
+- Proofs cover fills only. The ZK proof checks every executed fill (its signed order, limit \
+price, expiry, fees, margin and balances). Cancels, cancel-all and the dead man's switch are \
+enforced by the operator's matching engine and journal, not by the proof. So the proof does not \
+show that no fill followed an accepted cancel.
 - Fees: get_market shows the fixed maker and taker rates and the PnL-mode rates. Fee rates are a \
 proposed model under test.""",
     "setup": f"""\
 connect_account does the whole setup and is safe to call again:
-1. It installs the reviewed TS2 deployment pins (chain 421614, the settlement address, the \
-config hash and the API origin) into the private profile directory ~/.fairvenue/ts2-testnet.
+1. It installs the reviewed TS2 season 2 deployment pins (chain 421614, the settlement \
+address, the config hash and the API origin) into the private profile directory \
+~/.fairvenue/ts2-season2.
 2. It opens {KEY_SETUP_URL} in the user's browser and returns the link too. The user signs in \
-with Google if asked and clicks Create API key & download JSON. The button turns on once the \
-1,000 test USDC starter deposit has arrived. No wallet is needed. The key is a dedicated \
-Ed25519 bot key, not the browser terminal key, and it cannot withdraw.
+with Google if asked and clicks Create API key & download JSON. The button turns on as soon as \
+the account has its 1,000 test USDC, usually right after sign-in. No wallet is needed. The key \
+is a dedicated Ed25519 bot key, not the browser terminal key, and it cannot withdraw.
 3. It notices the download in the Downloads folder within a second, moves the key into the \
 profile with mode 0600 and removes the downloaded copy. Nobody sees the key's contents.
 4. It initializes the key's continuity database and runs a signed no-order check. The result \
@@ -81,11 +91,12 @@ names the public owner address, which also identifies hackathon winners.
 They can adjust the per-order limits there. Without dialog support, FAIRVENUE_TRADING=on and \
 the FAIRVENUE_MAX_ORDER_* variables do the same.
 
-Keys made before the TS2 upgrade (schema fairvenue-native-testnet-agent-v1) are refused with \
-"TS2: create a new bot key". The old profile in ~/.fairvenue/native-testnet is left untouched \
-and is not used. Keys expire too. connect_account notices and asks for a new one. If the user \
-saved the file outside Downloads, find_agent_key_downloads with that folder and \
-import_agent_key do step 3 by hand.
+Keys from an earlier season do not work. V4 keys (schema fairvenue-native-testnet-agent-v1) are \
+refused with "TS2: create a new bot key". TS2 season 1 keys are refused as keys of a previous \
+deployment. The old profiles in ~/.fairvenue/native-testnet (V4) and ~/.fairvenue/ts2-testnet \
+(TS2 season 1) are left untouched and are not used. Keys expire too. connect_account notices \
+and asks for a new one. If the user saved the file outside Downloads, find_agent_key_downloads \
+with that folder and import_agent_key do step 3 by hand.
 
 One key belongs to one process. A separate bot program needs its own key. Never delete a \
 continuity directory or an imported key file: either can hold the only way to resolve a request \
@@ -95,7 +106,7 @@ whose outcome is unknown. Before switching to a new key, recover any pending req
 strings. The price must be a whole number of ticks and the quantity a whole number of steps \
 (tick_size and step_size in get_market). Off-grid input is refused, never rounded. time_in_force \
 is GTC (rests up to 23 hours, optionally post_only) or IOC (takes liquidity up to the price and \
-cancels the rest). There are no market or FOK orders here.
+cancels the rest). This server sends no market or FOK orders.
 - An accepted order returns its order_id. Keep it: cancel_order takes it. get_journal keeps it \
 too.
 - Local limits refuse oversized orders and prices too far from the reference (the midpoint, or \
@@ -113,6 +124,8 @@ cancelled. Refresh it while the agent is active so orders die if the agent stops
 exact lookup. All participants share a global budget of about 120 commands a minute, with 60 \
 orders and account settings a minute per account. Trade deliberately. not_placed with reason \
 rate_limited means back off.
+- A cancel, cancel-all or dead man's switch is enforced by the operator's matching engine. \
+Season 2 proves fills, not cancels.
 - Track your own activity with get_journal. Fills, balances and positions are visible to the \
 user in the Arena terminal.""",
     "recovery": """\
@@ -127,9 +140,9 @@ context change). Nothing happened.
 - blocked: a request from this or another key still has an unknown outcome. Nothing was signed.
 - outcome_unknown: a timeout or lost reply after admission started. The exact signed original \
 stays in the continuity database. Call recover_pending_request (it only looks the original up, \
-it never resends, and it works with an expired key). accepted, rejected and not_settled clear \
-it. unresolved or still_unknown mean check again later. nothing_pending means nothing is \
-waiting.
+it never resends, and it works with an expired key). accepted, rejected, not_placed (it never \
+reached the journal and its expiry passed) and not_settled clear it. unresolved or \
+still_unknown mean check again later. nothing_pending means nothing is waiting.
 
 Never reprice, resign, resend or delete a pending original. Elapsed time or a new batch are not \
 evidence of its outcome. While any is pending, new signed requests are blocked. A result may \
@@ -168,9 +181,9 @@ liquidity. Maker volume counts resting orders that were filled.
 mean divided by their standard deviation, multiplied by √8760, with no risk-free rate. An \
 account needs that day's 24 hourly returns with non-zero variance to qualify on that day.
 
-Before the scoring days: the testnet now runs TS2. Bot keys made before the upgrade no longer \
-sign, so every bot needs a new key from Create API key & download JSON. Test it on the testnet \
-before November 16.""",
+Before the scoring days: the testnet now runs TS2 season 2. Bot keys from earlier seasons no \
+longer sign, so every bot needs a new key from Create API key & download JSON. Test it on the \
+testnet before November 16.""",
     "bot": """\
 For trading around the clock, graduate from chat to a standalone bot with the same SDK:
 

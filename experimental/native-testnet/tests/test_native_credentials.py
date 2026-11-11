@@ -94,11 +94,14 @@ class NativeCredentialTests(unittest.TestCase):
             self.assertEqual(str(caught.exception), "TS2: create a new bot key.")
 
     def test_another_ts2_deployment_is_a_previous_deployment_key(self):
-        for field, value in (("settlement", "0x" + "09" * 20), ("config_hash", "0x" + "11" * 32)):
+        season1 = {"settlement": "0x3beb98f3ab27d3ac9595e28a3ca03e016fb2745b",
+                   "config_hash": "0x6a72cb1998229bcd0d5ce8ea8bbeb0d6c294ee51a385f08208fe3439b58d8d91"}
+        for change in ({"settlement": "0x" + "09" * 20}, {"config_hash": "0x" + "11" * 32},
+                       season1):
             pins, exported = fixture()
-            exported[field] = value
-            exported["delegation"]["material"][field] = value
-            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+            exported.update(change)
+            exported["delegation"]["material"].update(change)
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
                 with self.assertRaises(AgentError) as caught:
                     self.load(write(directory, exported), pins)
                 self.assertEqual(caught.exception.code, "previous_deployment")

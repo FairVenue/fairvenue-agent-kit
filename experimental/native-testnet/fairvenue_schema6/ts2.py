@@ -17,8 +17,9 @@ import re
 from .protocol import AgentError, fail
 
 CHAIN_ID = 421614
-SETTLEMENT = "0x3beb98f3ab27d3ac9595e28a3ca03e016fb2745b"
-CONFIG_HASH = "0x6a72cb1998229bcd0d5ce8ea8bbeb0d6c294ee51a385f08208fe3439b58d8d91"
+#: TS2 season 2 (fill-only proving). Season 1 (0x3beb98f3…) keys are another deployment's.
+SETTLEMENT = "0xfd5e17a1a722e0890669aa8c71a024ea4e4277bd"
+CONFIG_HASH = "0x416ca6d7eeae85857f387b55e829052eb6474065874774f299e09c0484364bbd"
 #: The only TS2 deployment this package signs for. A new deployment needs a new release.
 PINS = {"chain_id": CHAIN_ID, "settlement": SETTLEMENT, "config_hash": CONFIG_HASH}
 
@@ -41,10 +42,15 @@ NOT_PLACED = {"invalid_request": "resign", "rejected": "resign",
               "admission_closed": "resign", "rate_limited": "resign"}
 #: Exact-original lookup status on the wire -> the public outcome name.
 #: ``unknown`` is never evidence that the request was not sent.
-RECOVERY = {"operator_journaled": "accepted", "not_placed": "rejected",
-            "not_settled": "not_settled", "unknown": "unresolved"}
+RECOVERY = {"operator_journaled": "accepted", "not_settled": "not_settled",
+            "unknown": "unresolved"}
+#: A ``not_placed`` lookup always carries one fixed ``reason`` (and no other
+#: status does): ``rejected`` (journaled, then refused by the native writer)
+#: or ``expired_never_admitted`` (never journaled and past its own expiry, so
+#: nothing can admit it any more). Reason -> the public outcome name.
+NOT_PLACED_RECOVERY = {"rejected": "rejected", "expired_never_admitted": "not_placed"}
 #: Outcomes that retire exactly the looked-up original.
-TERMINAL = ("accepted", "rejected", "not_settled")
+TERMINAL = ("accepted", "rejected", "not_placed", "not_settled")
 SECURITY = ("set_dms", "set_fee_mode", "set_leverage")
 
 U64 = (1 << 64) - 1
@@ -438,13 +444,20 @@ def ack_copy(value, request, digest, order_id):
 
 
 def recovery_copy(value, request, digest):
-    """One exact-original lookup reply bound to this request's digest."""
+    """One exact-original lookup reply bound to this request's digest.
+
+    ``reason`` is exactly present with ``not_placed`` and absent otherwise.
+    """
     try:
+        status = value.get("status") if type(value) is dict else None
+        reason = ("reason",) if status == "not_placed" else ()
         _exact(value, ("schema", "request_sha256", "status", "action", "lineage",
-                       "retry_authorized", *flag_keys(value)))
-        status = value["status"]
+                       "retry_authorized", *reason, *flag_keys(value)))
         if (value["schema"] != RECOVERY_SCHEMA or value["request_sha256"] != digest
-                or type(status) is not str or status not in RECOVERY
+                or type(status) is not str
+                or (status not in RECOVERY and status != "not_placed")
+                or (reason and (type(value["reason"]) is not str
+                                or value["reason"] not in NOT_PLACED_RECOVERY))
                 or value["action"] != request["action"]["type"]
                 or value["retry_authorized"] is not False):
             fail()
@@ -452,9 +465,10 @@ def recovery_copy(value, request, digest):
             uint(value["lineage"])
     except AgentError:
         raise AgentError("response_invalid") from None
-    return {"schema": RECOVERY_SCHEMA, "status": RECOVERY[status], "wire_status": status,
-            "request_sha256": digest, "action": value["action"], "lineage": value["lineage"],
-            "retry_authorized": False}
+    outcome = NOT_PLACED_RECOVERY[value["reason"]] if reason else RECOVERY[status]
+    return {"schema": RECOVERY_SCHEMA, "status": outcome, "wire_status": status,
+            "reason": value["reason"] if reason else None, "request_sha256": digest,
+            "action": value["action"], "lineage": value["lineage"], "retry_authorized": False}
 
 
 def refusal_reason(value, status, digest):

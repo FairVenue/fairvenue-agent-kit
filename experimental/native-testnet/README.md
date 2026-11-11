@@ -1,15 +1,17 @@
-# Experimental native TESTNET client (TS2)
+# Experimental native TESTNET client (TS2 season 2)
 
 `fairvenue_schema6.NativeTestnetClient` is a separate experimental protocol adapter for the TS2
 native TESTNET. The existing `fairvenue` SDK still targets virtual Arena. The installable skill
 has an explicit native branch using this package and a separate legacy V0 branch. Never use a V0
 key, bearer token, nonce or virtual balance as native authority.
 
-Version 0.3.0 switches the internals to the TS2 wire. The public calls stay the same:
+Version 0.3.0 switched the internals to the TS2 wire. Version 0.3.1 pins TS2 season 2 and reads
+the server's `not_placed` recovery reasons. The public calls stay the same:
 `load_native_testnet_installation`, `NativeTestnetClient.from_credentials`, `snapshot()`,
-`run()`, `recover_original()`, `has_pending_request()` and `close()`. Bot keys and grants from the
-earlier V4 testnet never become TS2 authority. A V4 key file is refused with
-"TS2: create a new bot key". Create a new key instead.
+`run()`, `recover_original()`, `has_pending_request()` and `close()`. Bot keys and grants from
+earlier deployments never become season 2 authority. A V4 key file is refused with
+"TS2: create a new bot key" and a TS2 season 1 key with `previous_deployment`. Create a new key
+instead.
 
 This package does not establish hosted access, working funding, live native liquidity, proof
 verification or release readiness. Use it only when the operator has separately approved the
@@ -41,15 +43,17 @@ not create an account, trade, fund a wallet or activate a server.
 
 Download a dedicated **TESTNET** bot key with **Create API key & download JSON** in the approved
 native Arena flow. The accepted format is `fairvenue-ts2-testnet-agent-v1`: chain
-**421614 (Arbitrum Sepolia)**, TS2 settlement `0x3beb98f3ab27d3ac9595e28a3ca03e016fb2745b` and
-config hash `0x6a72cb1998229bcd0d5ce8ea8bbeb0d6c294ee51a385f08208fe3439b58d8d91`, with the
-owner-signed delegation of the key and its Ed25519 seed. These pins bind the supported
-experimental deployment, not a mainnet service. Trading agents cannot withdraw. No wallet,
-deposit or broadcast helper is exposed here.
+**421614 (Arbitrum Sepolia)**, TS2 season 2 settlement
+`0xfd5e17a1a722e0890669aa8c71a024ea4e4277bd` and config hash
+`0x416ca6d7eeae85857f387b55e829052eb6474065874774f299e09c0484364bbd`, with the owner-signed
+delegation of the key and its Ed25519 seed. These pins bind the supported experimental
+deployment, not a mainnet service. Trading agents cannot withdraw. No wallet, deposit or
+broadcast helper is exposed here.
 
 A V4 `fairvenue-native-testnet-agent-v1` file raises `AgentError` with code `v4_key` and the
-message "TS2: create a new bot key." A TS2 key pinned to another settlement or config hash
-raises `previous_deployment`. Neither is ever converted.
+message "TS2: create a new bot key." A TS2 key pinned to another settlement or config hash,
+including every TS2 season 1 key (settlement `0x3beb98f3…`), raises `previous_deployment`.
+Neither is ever converted.
 
 Keep the downloaded file outside repositories, owner-only (`0600` or `0400`). Give a coding agent
 only its local path. Never paste a seed, key file or signed envelope into chat, logs, issues or a
@@ -58,7 +62,7 @@ One strategy or process owns the key.
 
 Install the operator-approved public installation JSON **independently** of the downloaded
 credential. The artifact `fairvenue_schema6/deployments/arbitrum-sepolia-ts2.json` has SHA256
-`8a7cb56d98859cfb6e69b2416e4ae7eb3974a6a1012867bb7b1b205a2d1ab169` and binds the TS2 pins and the
+`ba25da81e3ebc9f6679a184993dbc4a64fd089684f54e174e8ad654b725232d4` and binds the TS2 pins and the
 HTTPS API origin. The operator must approve its current installation separately. This packaged
 public pin is not a hosted-access or release claim. Copy it to a fresh owner-only file without
 overwriting any existing installation. Review the hash and provenance before use. The loader
@@ -87,7 +91,7 @@ from fairvenue_schema6 import NativeTestnetClient, load_native_testnet_installat
 async def no_order_dry_run():
     installed = load_native_testnet_installation(
         "/private/native-installation.json",
-        expected_sha256="8a7cb56d98859cfb6e69b2416e4ae7eb3974a6a1012867bb7b1b205a2d1ab169",
+        expected_sha256="ba25da81e3ebc9f6679a184993dbc4a64fd089684f54e174e8ad654b725232d4",
     )
     client = NativeTestnetClient.from_credentials(
         "/private/downloaded-testnet-agent.json",
@@ -139,6 +143,11 @@ A successful `run()` returns the operator journal's ACK (`fairvenue-ts2-agent-ac
 the request digest and, for an order, to its own order id) and the exact-original lookup that
 retired it. An ACK is not a fill, settlement or finality. Matching follows after FairLag.
 
+Season 2 proves fills only. The ZK proof checks every executed fill: its signed order and
+delegation, limit price, expiry, fees, margin and balances. Cancels, kill-all and the dead man's
+switch are enforced by the operator's matching engine and journal, not by the proof. A cancel ACK
+therefore carries no kill receipt (`digest` and `signature` are null and `kill_seq` is `"0"`).
+
 ## Exact-original recovery
 
 Before admission, the client durably retains one bounded **public** signed TS2 request. It does
@@ -147,11 +156,13 @@ acknowledgement leaves that original unresolved.
 
 On restart, open the **same** continuity database with `initialize=False` and call
 `await client.recover_original()` inside the same event loop. This is a lookup with the exact
-original body, not a resend. Only the exact original's own journal answer can retire it:
-`accepted` (journaled), `rejected` (journaled native rejection) or `not_settled` (its batch was
-voided, it never takes effect). `unresolved` stays retained. Stop and ask the operator to
-reconcile, never send another order, invent a replacement, expire or delete the original. An
-advanced nonce, increased balance, new batch or elapsed time is not evidence.
+original body, not a resend. Only the exact original's own lookup answer can retire it:
+`accepted` (journaled), `rejected` (journaled native rejection), `not_placed` (never journaled
+and past its own expiry, wire reason `expired_never_admitted`) or `not_settled` (its batch was
+voided, it never takes effect). The result's `reason` is the server's fixed `not_placed` reason,
+else `None`. `unresolved` stays retained. Stop and ask the operator to reconcile, never send
+another order, invent a replacement, expire or delete the original. An advanced nonce, increased
+balance, new batch or your own clock is not evidence. Only the server's answer is.
 
 `run()` itself also clears the original when the server answers a definitive `not_placed`
 refusal bound to that exact request (HTTP 409, or 429 for `rate_limited`, refused before any

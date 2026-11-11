@@ -3,8 +3,9 @@
 The prompt below is **legacy V0 virtual Arena only**. For an independently approved native
 TESTNET install the plugin (skill and [MCP server](MCP.md)) or use the
 [native setup guide](../skills/fairvenue/references/native-testnet.md) and
-`fairvenue_schema6.NativeTestnetClient`, never this V0 transport or an old key.
-Replace the two angle-bracket sections. Never paste credentials into chat.
+`fairvenue_schema6.NativeTestnetClient`, never this V0 transport or an old key. The hosted
+`app.fairvenue.xyz` Arena now runs the native TESTNET, so this prompt needs an operator-provided
+or local V0 Arena origin. Replace the angle-bracket sections. Never paste credentials into chat.
 
 ```text
 Integrate this repository with the FairVenue Arena virtual-settlement testnet.
@@ -19,8 +20,9 @@ Pin a reviewed commit. Do not invent endpoints, fields, enum values or a hosted 
 Read FAIRVENUE_API_URL and FAIRVENUE_CREDENTIALS from the environment. Never print, commit or ask
 me to paste the Ed25519 seed, bearer token, complete signed envelope or private stream events.
 
-If I need a bot key, give me https://app.fairvenue.xyz/?setup=api-key (or the operator-provided
-Arena origin with /?setup=api-key) and ask me to click Create & download API key, then say "done".
+If I need a bot key, give me <the operator-provided V0 Arena origin>/?setup=api-key and ask me
+to click Create & download API key, then say "done". Never use the app.fairvenue.xyz key page:
+it creates native TESTNET keys that this SDK cannot use.
 Help locate and secure the downloaded file without exposing its contents to chat or model context.
 Handle available local setup yourself and guide me through the first no-order dry run.
 
@@ -31,9 +33,9 @@ Requirements:
 - Use Alo for post-only orders.
 - For taker behavior, read BBO and submit a price-protected Ioc. There is no market-order action.
 - Give each retriable logical order a stable client_order_id.
-- Treat accepted as durable receipt only; confirm applied/rejected through transaction_status or a
+- Treat accepted as durable receipt only. Confirm applied/rejected through transaction_status or a
   private WebSocket event before changing strategy state.
-- Use the SDK signing and nonce implementation; do not hand-roll either.
+- Use the SDK signing and nonce implementation. Do not hand-roll either.
 - Reconnect with bounded exponential backoff, reauthenticate, resubscribe and discard the local book
   after any sequence gap.
 - Respect retry_after_ms and keep cancel/dead-man-switch traffic available under order throttling.

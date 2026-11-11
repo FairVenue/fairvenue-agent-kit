@@ -2,8 +2,8 @@
   "schema": "fairvenue-ts2-testnet-installation-v1",
   "environment": "TESTNET",
   "chain_id": 421614,
-  "settlement": "0x3beb98f3ab27d3ac9595e28a3ca03e016fb2745b",
-  "config_hash": "0x6a72cb1998229bcd0d5ce8ea8bbeb0d6c294ee51a385f08208fe3439b58d8d91",
+  "settlement": "0xfd5e17a1a722e0890669aa8c71a024ea4e4277bd",
+  "config_hash": "0x416ca6d7eeae85857f387b55e829052eb6474065874774f299e09c0484364bbd",
   "api_namespace": "/v1",
   "api_url": "https://app.fairvenue.xyz/"
 }
