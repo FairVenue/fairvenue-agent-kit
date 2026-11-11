@@ -20,15 +20,17 @@ if __name__ != "__main__":
 # Worker exit status of a bounded JSON admit refusal body (validated by the
 # client, never trusted here); 0 is an ordinary 200 reply, anything else fails.
 _REFUSALS = {409: 2, 429: 3}
-# The only paths: the agent endpoints and the public market read, which needs
-# the TS2 tick and lot sizes. No cookie or key reaches any of them.
+# The only paths: the agent endpoints, the bot-signed account read and the
+# public market read, which needs the TS2 tick and lot sizes. No cookie or key
+# reaches any of them.
 _PATHS = ("/v1/agent/context", "/v1/agent/prepare", "/v1/agent/admit", "/v1/agent/recovery",
-          "/api/v1/info")
+          "/v1/ts2/agent/read", "/api/v1/info")
 
 
 def _limit(path):
-    """Largest accepted reply: a public market snapshot, else a 16 KiB agent reply."""
-    return 131072 if path == "/api/v1/info" else 16384
+    """Largest accepted reply: 128 KiB for the market snapshot and the account
+    read, else a 16 KiB agent reply."""
+    return 131072 if path in ("/api/v1/info", "/v1/ts2/agent/read") else 16384
 
 
 def _http(origin, path, body, timeout):

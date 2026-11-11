@@ -10,40 +10,47 @@ explicitly installed environment before choosing a client. A shared hostname is 
 
 ## Use the FairVenue MCP tools when they are connected
 
-If tools from the `fairvenue` MCP server are available (`connect_account`, `get_market`,
-`place_order` and the rest), use them for native TESTNET setup, market data and signed actions.
-They implement the native reference below: reviewed deployment pins, local key handling,
-exact-original recovery and the user's order limits. Keep the user's part to clicks.
+If tools from the `fairvenue` MCP server are available (`connect_account`, `get_account`,
+`get_market`, `place_order` and the rest), use them for native TESTNET setup, account and market
+data and signed actions. They implement the native reference below: reviewed deployment pins,
+local key handling, exact-original recovery and the user's order limits. Keep the user's part to
+clicks.
 
 - To connect, call `connect_account` and pass its `say_to_user` text on. It opens the key page
   in the browser and picks up the downloaded key by itself. Call it again while it is
-  `waiting_for_key`. Never ask the user to type done, paste a key or move a file.
+  `waiting_for_key`. Never ask the user to type done or paste a key. Only on a remote or SSH
+  machine does the user copy the key file over, then you call `import_agent_key`.
 - Never open, print or upload a key file, even when you could.
-- The first signed action shows the user a one-click dialog to allow trading. Never work around
-  it or the limits. Use `dry_run` to show an order before it is signed.
+- The first signed order or account setting shows the user a one-click dialog to allow
+  trading. Never work around it or the limits. Use `dry_run` to show an order before it is
+  signed.
+- Read `get_account` before and after trading: balances, margin, the position, open orders and
+  fills. Use `close_position` to flatten, and keep MARKET `max_slippage_bps` small.
 - Treat `outcome_unknown` and `blocked` as unresolved: call `recover_pending_request` and send
   nothing else, and don't switch keys, until it resolves. `not_placed`, `not_executed` and
-  `failed` mean nothing happened.
-- The MCP server does not read balances, positions or fills. Use `get_journal` (it keeps the
-  `order_id` of every order the server placed), public trades and the user's Arena terminal.
+  `failed` mean nothing happened. `not_placed` with `admission_closed` means trading is paused:
+  relay the plain-word reason.
 - The testnet runs TS2 season 2. A bot key from season 1 or the older V4 testnet is refused.
   Then the user creates a new key, nothing else. If `setup_status` shows a server version below
-  0.3.1, or the pins of an earlier season, ask the user to update the plugin (or the `uvx`
-  command) and restart the client.
+  0.4.0, or the pins of an earlier season, ask the user to update the plugin (or the `uvx`
+  command, see [references/mcp.md](references/mcp.md)) and restart the client.
 - Season 2 proves fills only. Cancels, cancel-all and the dead man's switch are enforced by the
   operator's matching engine, not by the proof. Never say a proof guarantees that no fill
   follows a cancel.
 
-**When the tools are missing, offer them.** Before any native TESTNET setup, offer to connect
-the FairVenue MCP tools. It is the recommended path: the user only clicks in the browser and in
-one trading dialog, and you get market data, signing and recovery as tools. Say what it installs
-(a local stdio server run with `uvx`), ask before installing anything, then follow
-[references/mcp.md](references/mcp.md) for the user's client: one plugin command in Claude Code
-or Codex, a short server entry elsewhere. After the client reloads, call `connect_account`.
+**When the tools are missing, offer them where they fit.** In Claude Code and Codex, offer to
+connect the FairVenue MCP tools before any native TESTNET setup. It is the recommended path
+there: one plugin command, the user only clicks in the browser and in one trading dialog, and
+you get account data, market data, signing and recovery as tools. In Cursor, VS Code, Claude
+Desktop and other clients, mention it as an option the user can choose, because it needs `uv`
+and a config entry. Say what it installs (a local stdio server run with `uvx`), ask before
+installing anything, then follow [references/mcp.md](references/mcp.md) for the user's client.
+After the client reloads, call `connect_account`.
 
 Offer it once per conversation, not again after the user declines. Use the Python SDK flow below
 when the user declines, the client cannot run MCP servers, or they want a standalone bot that
-trades around the clock.
+trades around the clock. Hackathon prizes need a full UTC day of hourly returns, so steer
+prize-seekers to a standalone bot with its own key once they have explored with the tools.
 
 For the Bot Building Hackathon read [references/hackathon.md](references/hackathon.md).
 

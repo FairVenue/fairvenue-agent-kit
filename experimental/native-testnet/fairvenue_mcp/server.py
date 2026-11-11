@@ -1,7 +1,7 @@
 """FairVenue native TESTNET MCP server over stdio.
 
 Run ``fairvenue-mcp`` (or ``python -m fairvenue_mcp``). Configuration comes from
-``FAIRVENUE_*`` environment variables; see ``docs/MCP.md``.
+``FAIRVENUE_*`` environment variables. See ``docs/MCP.md``.
 
 The user only clicks: ``connect_account`` opens the key page in the browser and
 picks up the downloaded key itself, and the first signed action shows a
@@ -44,10 +44,13 @@ Topic = Literal["overview", "setup", "trading", "recovery", "hackathon", "bot"]
 
 LOCAL_READ = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 PUBLIC_READ = ToolAnnotations(read_only_hint=True, open_world_hint=True)
+#: A bot-signed read: it changes nothing on the exchange.
+SIGNED_READ = ToolAnnotations(read_only_hint=True, open_world_hint=True)
 LOCAL_SETUP = ToolAnnotations(
     read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False
 )
-SIGNED_READ = ToolAnnotations(
+#: Setup that also runs a signed no-order read or a recovery lookup.
+SIGNED_SETUP = ToolAnnotations(
     read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=True
 )
 SIGNED_ACTION = ToolAnnotations(
@@ -62,28 +65,43 @@ Quantity = Annotated[
         "number of steps (step_size in get_market). It is never rounded."
     ),
 ]
-Price = Annotated[
-    str,
+OrderType = Annotated[
+    Literal["LIMIT", "MARKET"],
     Field(
-        description='Limit price in test USDC as a decimal string, for example "80100.5". '
-        "Must be on the tick (tick_size in get_market). It is never rounded. IOC orders use "
-        "it as their worst acceptable price."
+        description="LIMIT needs a price. MARKET takes liquidity now and signs a worst price "
+        "max_slippage_bps beyond the best opposite price (or the mark when that side is empty)."
     ),
 ]
-OrderId = Annotated[
-    str,
-    Field(description="The 0x order ID that place_order returned or the Arena terminal shows."),
+Price = Annotated[
+    str | None,
+    Field(
+        description="LIMIT only: the limit price in test USDC as a decimal string, for example "
+        '"80100.5". Must be on the tick (tick_size in get_market). It is never rounded. Leave '
+        "it empty for MARKET."
+    ),
 ]
 TimeInForce = Annotated[
-    Literal["GTC", "IOC"],
-    Field(description="GTC rests on the book. IOC takes liquidity up to the price, then cancels."),
+    Literal["GTC", "IOC", "FOK"] | None,
+    Field(
+        description="GTC rests on the book (LIMIT only). IOC fills what it can now and cancels "
+        "the rest. FOK fills completely or not at all. Default: GTC for LIMIT, IOC for MARKET."
+    ),
 ]
 PostOnly = Annotated[
-    bool, Field(description="GTC only. Refused locally if it would cross the book.")
+    bool, Field(description="LIMIT GTC only. Refused locally if it would cross the book.")
 ]
 ReduceOnly = Annotated[bool, Field(description="Only reduce an existing position.")]
-DryRun = Annotated[
-    bool, Field(description="Validate, round and show the exact order without signing it.")
+Slippage = Annotated[
+    Annotated[int, Field(ge=1, le=1000)] | None,
+    Field(
+        description="MARKET only: the worst price in basis points beyond the reference, 1 to "
+        "1000. Default 50 (0.5%). It may not exceed the price-distance limit.",
+    ),
+]
+DryRun = Annotated[bool, Field(description="Validate and show the exact order without signing.")]
+OrderId = Annotated[
+    str,
+    Field(description="The 0x order ID from place_order, get_account or the Arena terminal."),
 ]
 
 
@@ -118,9 +136,10 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
     server: MCPServer[Any] = MCPServer(
         "fairvenue",
         title="FairVenue native TESTNET",
-        description="Market data, setup and signed trading for the FairVenue mock-token testnet.",
+        description="Account, market data, setup and signed trading for the FairVenue "
+        "mock-token testnet.",
         instructions=guide.INSTRUCTIONS,
-        website_url="https://fairvenue.xyz/docs",
+        website_url="https://github.com/FairVenue/fairvenue-agent-kit/blob/main/docs/MCP.md",
         version=__version__,
         lifespan=lifespan,
         log_level="WARNING",
@@ -162,11 +181,12 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
             return "no_dialog"
         limits = agent().config.limits
         return Elicit(
-            "Allow this agent to sign orders on the FairVenue TESTNET for this session? Mock "
-            "USDC only, no real funds. Each order: at most "
+            "Allow this agent to sign orders and account settings on the FairVenue TESTNET for "
+            "this session? Mock USDC only, no real funds. Each order: at most "
             f"{fmt(limits.max_order_quantity)} BTC and {fmt(limits.max_order_notional)} test "
             f"USDC, priced within {fmt(limits.max_price_deviation_bps / 100)}% of the market. "
-            "Leave the limits empty to keep these values.",
+            "Market orders stay within that distance too. Leave the limits empty to keep these "
+            "values.",
             TradingConsent,
         )
 
@@ -202,7 +222,7 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
 
     # Setup ----------------------------------------------------------------------
 
-    @server.tool(title="Connect account", annotations=SIGNED_READ)
+    @server.tool(title="Connect account", annotations=SIGNED_SETUP)
     async def connect_account(
         wait_seconds: Annotated[
             float,
@@ -213,14 +233,14 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
 
         Installs the reviewed pins, reuses a valid key, or opens the key page in
         the user's browser and picks up the downloaded key automatically, then
-        checks the connection without placing an order. Relay say_to_user to the
-        user. While the status is waiting_for_key, call it again.
+        checks the connection with a signed read that places no order. Relay
+        say_to_user to the user. While the status is waiting_for_key, call it again.
         """
         return await run(lambda t: t.connect(wait_seconds=wait_seconds))
 
     @server.tool(title="Setup status", annotations=LOCAL_READ)
     async def setup_status() -> dict[str, Any]:
-        """Local readiness, pending requests, the trading switch and the next step.
+        """Local readiness, pending requests, the trading switch, limits and the next step.
 
         Reports the installed deployment pins, the active agent key (public fields
         only), its continuity database and any request with an unknown outcome.
@@ -243,15 +263,6 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
     async def disable_trading() -> dict[str, Any]:
         """Stop signing orders until the user allows trading again."""
         return await local(lambda t: t.pause_trading())
-
-    @server.tool(title="Install deployment pins", annotations=LOCAL_SETUP)
-    async def install_deployment_pins() -> dict[str, Any]:
-        """Install the reviewed TESTNET deployment pins. connect_account does this too.
-
-        Copies the pins packaged with this server after checking their SHA256.
-        Never overwrites an existing file.
-        """
-        return await local(lambda t: t.install_pins())
 
     @server.tool(title="Find downloaded agent keys", annotations=LOCAL_READ)
     async def find_agent_key_downloads(
@@ -280,16 +291,20 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
         """
         return await local(lambda t: t.import_key(source_path))
 
-    @server.tool(title="Verify connection", annotations=SIGNED_READ)
-    async def verify_connection() -> dict[str, Any]:
-        """Signed no-order check of the active key against the TESTNET API.
+    # Account and market data ------------------------------------------------------
 
-        Returns the public owner address, key expiry, batch and whether a request
-        is pending.
+    @server.tool(title="Account", annotations=SIGNED_READ)
+    async def get_account() -> dict[str, Any]:
+        """Balances, margin, the position, open orders and recent fills of this account.
+
+        A bot-signed read that places no order and needs no dialog: wallet balance,
+        available and locked margin, realized and unrealized PnL, the position with
+        its entry and mark price, fee mode and leverage, open and FairLag-held
+        orders, the latest fills with their settlement state, and whether trading
+        is open (with the reason in plain words when it is not). Soft,
+        operator-trusted state.
         """
-        return await run(lambda t: t.verify())
-
-    # Market data ----------------------------------------------------------------
+        return await run(lambda t: t.account())
 
     @server.tool(title="Market snapshot", annotations=PUBLIC_READ)
     async def get_market(
@@ -347,19 +362,23 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
     async def place_order(
         side: Side,
         quantity: Quantity,
-        price: Price,
         consent: OrderConsent,
-        time_in_force: TimeInForce = "GTC",
+        order_type: OrderType = "LIMIT",
+        price: Price = None,
+        time_in_force: TimeInForce = None,
         post_only: PostOnly = False,
         reduce_only: ReduceOnly = False,
+        max_slippage_bps: Slippage = None,
         dry_run: DryRun = False,
     ) -> dict[str, Any]:
-        """Sign and submit one LIMIT order for BTCUSDC with the active bot key.
+        """Sign and submit one BTCUSDC order with the active bot key.
 
-        The first signed action of a session shows the user a one-click dialog to
-        allow trading. Refuses prices off the tick and sizes off the step (nothing
-        is rounded), enforces the limits and refuses prices far from the reference.
-        A GTC order lives up to 23 hours. Status: accepted (journaled, with the
+        LIMIT (GTC, post-only GTC, IOC or FOK) or MARKET (IOC or FOK with a worst
+        price max_slippage_bps beyond the best opposite price). The first signed
+        action of a session shows the user a one-click dialog to allow trading.
+        Refuses prices off the tick and sizes off the step (nothing is rounded),
+        enforces the size, notional and price-distance limits, and refuses
+        locally while trading is paused. Status: accepted (journaled, with the
         order_id that cancel_order takes) or rejected, not_placed, not_executed or
         failed (nothing happened, a new request is safe), blocked (another request
         is pending) or outcome_unknown (call recover_pending_request, never resend).
@@ -371,38 +390,40 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
                 side=side,
                 quantity=quantity,
                 price=price,
+                order_type=order_type,
                 time_in_force=time_in_force,
                 post_only=post_only,
                 reduce_only=reduce_only,
+                max_slippage_bps=max_slippage_bps,
             )
         )
 
-    @server.tool(title="Modify order", annotations=SIGNED_ACTION)
-    async def modify_order(
-        order_id: OrderId,
-        side: Side,
-        quantity: Quantity,
-        price: Price,
-        time_in_force: TimeInForce = "GTC",
-        post_only: PostOnly = False,
-        reduce_only: ReduceOnly = False,
+    @server.tool(title="Close position", annotations=SIGNED_ACTION)
+    async def close_position(
+        consent: OrderConsent,
+        quantity: Annotated[
+            str | None,
+            Field(
+                description="BTC to close as a decimal string, whole steps. Empty closes the "
+                "whole position."
+            ),
+        ] = None,
+        max_slippage_bps: Slippage = None,
         dry_run: DryRun = False,
     ) -> dict[str, Any]:
-        """Not available on TS2: it always refuses and signs nothing.
+        """Close all or part of the position with a reduce-only MARKET IOC order.
 
-        Cancel the order with cancel_order and place a new one with place_order.
-        It never shows the trading dialog, because it can never sign.
+        Reads the position with a signed account read, then signs a reduce-only
+        order on the opposite side whose worst price is max_slippage_bps beyond
+        the best opposite price (default 50 bps). It can only shrink the
+        position, so the size and notional limits do not apply. The price
+        distance limit does. Works while the mark lags. Shows the same statuses
+        as place_order.
         """
+        apply_consent(consent)
         return await run(
-            lambda t: t.modify(
-                order_id=order_id,
-                dry_run=dry_run,
-                side=side,
-                quantity=quantity,
-                price=price,
-                time_in_force=time_in_force,
-                post_only=post_only,
-                reduce_only=reduce_only,
+            lambda t: t.close_position(
+                quantity=quantity, max_slippage_bps=max_slippage_bps, dry_run=dry_run
             )
         )
 
@@ -411,27 +432,16 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
         order_id: OrderId,
         consent: Consent,
     ) -> dict[str, Any]:
-        """Cancel one order by its 0x order ID. place_order returns the ID of every
-        order this agent places. For other orders ask the user to copy the ID from
-        the Arena terminal, or use cancel_all_orders."""
+        """Cancel one order by its 0x order ID. place_order and get_account return it."""
         apply_consent(consent)
         return await run(lambda t: t.cancel(order_id=order_id))
 
     @server.tool(title="Cancel all orders", annotations=SIGNED_ACTION)
-    async def cancel_all_orders(
-        consent: Consent,
-        within_seconds: Annotated[
-            int,
-            Field(
-                ge=2,
-                le=600,
-                description="Kept for compatibility. TS2 cancels at once, so it is not used.",
-            ),
-        ] = 2,
-    ) -> dict[str, Any]:
+    async def cancel_all_orders(consent: Consent) -> dict[str, Any]:
         """Cancel every resting and FairLag-held order of the account at once (TS2 kill-all).
 
-        Orders placed after it are not affected. It leaves the dead man's switch as it is.
+        Orders placed after it are not affected. It leaves the dead man's switch as
+        it is. Cancels are still sent while trading is paused, the exchange decides.
         """
         apply_consent(consent)
         return await run(lambda t: t.cancel_all())
@@ -465,10 +475,8 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
         ],
         consent: Consent,
     ) -> dict[str, Any]:
-        """Set the account's leverage. A decrease needs no open orders or position.
-
-        The testnet may keep account settings closed (not_placed, admission_closed).
-        """
+        """Set the account's leverage. It can rise at any time. It can fall only with no
+        position and no working orders. A refusal explains that rule. Asks for consent."""
         apply_consent(consent)
         return await run(lambda t: t.leverage(leverage=leverage))
 
@@ -480,15 +488,15 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
         ],
         consent: Consent,
     ) -> dict[str, Any]:
-        """Switch the account's fee mode. Only allowed with no open orders or position.
+        """Switch the account's fee mode. Only with no position and no working orders.
 
-        Every later order carries this mode. The testnet may keep account settings
-        closed (not_placed, admission_closed).
+        Every later order carries this mode. A refusal explains that rule. Asks for
+        consent.
         """
         apply_consent(consent)
         return await run(lambda t: t.fee_mode(mode=mode))
 
-    @server.tool(title="Recover pending request", annotations=SIGNED_READ)
+    @server.tool(title="Recover pending request", annotations=SIGNED_SETUP)
     async def recover_pending_request() -> dict[str, Any]:
         """Look up the outcome of a signed request whose result is unknown.
 
@@ -496,7 +504,8 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
         public action. Only queries the exact retained original and never resends
         it. accepted, rejected, not_placed (never journaled and expired) and
         not_settled resolve it. unresolved and still_unknown mean try again later.
-        nothing_pending means no request is waiting.
+        A request that never reached the server resolves only after its own
+        expiry. nothing_pending means no request is waiting.
         """
         return await run(lambda t: t.recover())
 
@@ -508,8 +517,8 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
     ) -> dict[str, Any]:
         """This server's own submitted requests and outcomes, newest last.
 
-        The agent's memory, including the order IDs of its orders. This server does
-        not read fills or balances.
+        The agent's memory of what it sent, including order IDs. For fills,
+        balances and the position use get_account.
         """
         return await local(lambda t: {"entries": t.journal.tail(limit)})
 

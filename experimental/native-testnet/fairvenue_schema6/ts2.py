@@ -33,6 +33,15 @@ CONTEXT_SCHEMA = "fairvenue-ts2-agent-context-v1"
 ACK_SCHEMA = "fairvenue-ts2-agent-ack-v1"
 RECOVERY_SCHEMA = "fairvenue-ts2-agent-recovery-v1"
 MARKET_SCHEMA = "fairvenue-ts2-public-market-v1"
+#: The bot-signed account read on ``/v1/ts2/agent/read`` and its reply.
+READ_SCHEMA = "fairvenue-ts2-agent-read-v1"
+VIEW_SCHEMA = "fairvenue-ts2-agent-view-v1"
+READINESS_SCHEMA = "fairvenue-ts2-admission-readiness-v1"
+#: The signed-read expiry must lie in (now, now + 60 s] (``read_auth.rs``).
+READ_WINDOW_MS = 60_000
+#: Default MARKET protection: 0.5% beyond the reference (the browser's bound).
+DEFAULT_SLIPPAGE_BPS = 50
+MAX_SLIPPAGE_BPS = 1_000
 
 #: Delegation rights (fairvenue-protocol ``delegation.rs``).
 TRADE, CANCEL, MODIFY, DEAD_MAN_SWITCH = 1, 2, 4, 8
@@ -518,22 +527,53 @@ def units(value, unit, rounding=None):
     return str(result)
 
 
-def protection_ticks(opposite, tick, side):
-    """A MARKET order's signed bound: 0.5% beyond the best opposite price, rounded
-    to the tick away from the book (up for BUY, down for SELL)."""
+def slippage_bps(value):
+    """A MARKET protection width in basis points: an int from 1 to 1,000 (10%)."""
+    if type(value) is not int or not 1 <= value <= MAX_SLIPPAGE_BPS:
+        fail("invalid_order")
+    return value
+
+
+def protection_ticks(opposite, tick, side, bps=DEFAULT_SLIPPAGE_BPS):
+    """A MARKET order's signed bound: ``bps`` beyond the reference price (the best
+    opposite price, or the mark when that side is empty), rounded to the tick
+    away from the book (up for BUY, down for SELL). The default 50 bps is the
+    browser's 0.5% bound (``protectedMarketPrice``)."""
+    bps = slippage_bps(bps)
     try:
         a, a_scale = _decimal(opposite, positive=True)
         b, b_scale = _decimal(tick, positive=True)
     except AgentError:
         raise AgentError("invalid_order") from None
-    ratio = 1005 if side == "BUY" else 995
-    numerator, denominator = a * ratio * 10 ** b_scale, 1000 * b * 10 ** a_scale
+    ratio = 10_000 + bps if side == "BUY" else 10_000 - bps
+    numerator, denominator = a * ratio * 10 ** b_scale, 10_000 * b * 10 ** a_scale
     result = numerator // denominator
     if side == "BUY" and numerator % denominator:
         result += 1
     if not 0 < result <= U64:
         fail("invalid_order")
     return str(result)
+
+
+def times(count, unit):
+    """The exact decimal string of ``count`` (a u64 string) whole ``unit`` steps."""
+    c = int(uint(count))
+    u, scale = _decimal(unit, positive=True)
+    return _plain(c * u, scale)
+
+
+def micros(value):
+    """The exact decimal string of a micro-unit u64 string (6 decimals)."""
+    return _plain(int(uint(value)), 6)
+
+
+def _plain(number, scale):
+    """``number / 10**scale`` as plain decimal text without trailing zeros."""
+    sign = "-" if number < 0 else ""
+    digits = str(abs(number)).rjust(scale + 1, "0")
+    whole, fraction = (digits[:-scale], digits[-scale:]) if scale else (digits, "")
+    fraction = fraction.rstrip("0")
+    return sign + whole + ("." + fraction if fraction else "")
 
 
 def market_rules(value, pins):
@@ -561,7 +601,283 @@ def market_rules(value, pins):
                 _decimal(level.get("price"), positive=True)
                 _decimal(level.get("quantity"), positive=True)
             best[side] = levels[0]["price"] if levels else None
+        mark = value.get("mark_price")
+        if mark is not None:
+            _decimal(mark, positive=True)
     except AgentError:
         raise AgentError("response_invalid") from None
     return {"tick_size": tick, "step_size": step,
-            "best_bid": best["bids"], "best_ask": best["asks"]}
+            "best_bid": best["bids"], "best_ask": best["asks"], "mark_price": mark}
+
+
+# Bot-signed account read ------------------------------------------------------
+
+_SIGNED = re.compile(r"-?(0|[1-9][0-9]*)(\.[0-9]+)?")
+_HASH = re.compile(r"0x[0-9a-f]{64}")
+_VIEW = ("schema", *_DOMAIN, "source", "observed_at_ms", "market", "account", "orders", "fills",
+         "history", "admission", "tradingEnabled", "readiness")
+_READINESS = ("schema", "source", *_DOMAIN, "enabled", "reason", "observed_at_ms",
+              "chain_block_number", "chain_block_hash", "chain_block_time_ms", "captured_at_ms",
+              "expires_at_ms")
+#: Single-provider TESTNET observation (2026-11-10), or an earlier writer's paired label.
+READINESS_SOURCES = ("operator_single_provider_rpc_and_native_writer",
+                     "operator_paired_rpc_and_native_writer")
+_SOFT = ("wallet_balance", "reserved_order_margin", "locked_position_margin", "realized_pnl",
+         "funding_paid", "position_quantity", "position_entry_price")
+_SETTLED = ("batch_number", "lineage", "state_root", "transaction_hash", "block_hash",
+            "block_number", "finalized_at_block", "wallet_balance", "realized_pnl",
+            "funding_paid", "position_quantity", "exit_micros")
+#: ``core.order_status`` words; a FairLag-held order is ``pending`` and has no detail.
+ORDER_STATUSES = ("pending", "resting", "partially_filled", "filled", "canceled", "killed",
+                  "expired", "rejected", "not_in_book", "unknown")
+#: Orders that can still fill or rest: FairLag-held, resting or partly filled.
+OPEN_ORDER_STATUSES = ("pending", "resting", "partially_filled")
+_ORDER_DETAIL = ("side", "kind", "time_in_force", "limit_price_ticks", "quantity_lots",
+                 "filled_lots", "expires_at_ms", "post_only", "reduce_only")
+_FILL = ("position", "at_ms", "batch_number", "lineage", "kind", "role", "side", "order_id",
+         "price_ticks", "quantity_lots", "fee", "settlement")
+#: A fill's TS2 settlement state (``views.rs settlement``), never a V4 proof object.
+SETTLEMENT_STATES = ("not_settled", "operator_soft", "operator_sealed",
+                     "controller_observed_settled", "controller_observed_settled_final")
+_CHAIN_SETTLEMENT = ("state", "state_root", "transaction_hash", "block_hash", "block_number",
+                     "finalized_at_block")
+
+
+def read_signing_message(pins, account_key, expires_at_ms):
+    """``FV_TS2_READ_SIG\\0 || config || u8 1 || u64be account || 32 zero bytes || u64be
+    expiry``: the native account read (kind 1, zero target). No nonce, no admission."""
+    pins = deployment(pins)
+    return (b"FV_TS2_READ_SIG\0" + fixed(pins["config_hash"], 32, nonzero=True) + bytes([1])
+            + account_number(account_key).to_bytes(8, "big") + bytes(32)
+            + _u64(uint(expires_at_ms, nonzero=True)))
+
+
+def read_request(pins, account_key, agent_public_key, expires_at_ms, signature, crypto):
+    """The exact ``fairvenue-ts2-agent-read-v1`` body, its signature verified."""
+    pins = deployment(pins)
+    fixed(agent_public_key, 32, nonzero=True)
+    fixed(signature, 64)
+    message = read_signing_message(pins, account_key, expires_at_ms)
+    if not crypto.verify(signature, message, agent_public_key):
+        fail("signature_invalid")
+    return {"schema": READ_SCHEMA, **pins, "account_key": account_key,
+            "agent_public_key": agent_public_key, "expires_at_ms": expires_at_ms,
+            "signature": signature}
+
+
+def _signed(text, *, signed=True):
+    if (type(text) is not str or len(text) > 96
+            or (_SIGNED if signed else _DECIMAL).fullmatch(text) is None):
+        fail()
+    return text
+
+
+def _hash(text):
+    if type(text) is not str or _HASH.fullmatch(text) is None or text == _ZERO:
+        fail()
+    return text
+
+
+def _levels(rows):
+    if type(rows) is not list or len(rows) > 20:
+        fail()
+    for row in rows:
+        _exact(row, ("price", "quantity"))
+        _decimal(row["price"], positive=True)
+        _decimal(row["quantity"], positive=True)
+    return [dict(row) for row in rows]
+
+
+def _readiness(value, pins, observed, enabled):
+    _exact(value, _READINESS)
+    if (value["schema"] != READINESS_SCHEMA or value["source"] not in READINESS_SOURCES
+            or deployment({key: value[key] for key in _DOMAIN}) != deployment(pins)
+            or type(value["enabled"]) is not bool or value["enabled"] != enabled
+            or type(value["reason"]) is not str or _REASON.fullmatch(value["reason"]) is None
+            or value["enabled"] != (value["reason"] == "open")
+            or value["observed_at_ms"] != observed):
+        fail()
+    chain = ("chain_block_number", "chain_block_hash", "chain_block_time_ms", "captured_at_ms",
+             "expires_at_ms")
+    present = [key for key in chain if value[key] is not None]
+    if present and len(present) != len(chain):
+        fail()
+    if present:
+        for key in chain:
+            if key == "chain_block_hash":
+                _hash(value[key])
+            else:
+                uint(value[key])
+    elif enabled:
+        fail()
+    return {"reason": value["reason"], "source": value["source"],
+            "expires_at_ms": value["expires_at_ms"]}
+
+
+def _settled(value):
+    if value is None:
+        return None
+    _exact(value, _SETTLED)
+    for key in ("batch_number", "lineage", "block_number", "exit_micros"):
+        uint(value[key])
+    for key in ("state_root", "transaction_hash", "block_hash"):
+        _hash(value[key])
+    if value["finalized_at_block"] is not None:
+        uint(value["finalized_at_block"])
+    for key in ("wallet_balance", "realized_pnl", "funding_paid", "position_quantity"):
+        _signed(value[key])
+    return dict(value)
+
+
+def _fill_settlement(value):
+    state = value.get("state") if type(value) is dict else None
+    if state in ("controller_observed_settled", "controller_observed_settled_final"):
+        _exact(value, _CHAIN_SETTLEMENT)
+        _hash(value["state_root"])
+        _hash(value["transaction_hash"])
+        _hash(value["block_hash"])
+        uint(value["block_number"])
+        if (value["finalized_at_block"] is None) != (state == "controller_observed_settled"):
+            fail()
+        if value["finalized_at_block"] is not None:
+            uint(value["finalized_at_block"])
+    elif state in SETTLEMENT_STATES:
+        _exact(value, ("state",))
+    else:
+        fail()
+    return dict(value)
+
+
+def view_copy(value, pins):
+    """One strict ``fairvenue-ts2-agent-view-v1`` reply of the signed account read.
+
+    Prices and sizes are exact decimal strings: order and fill ticks and lots
+    are converted with the reply's own tick and step sizes. A FairLag-held
+    order (``pending``) never shows its side, price or size. Soft, operator-
+    trusted state: never a proof, L1 finality or a release claim.
+    """
+    try:
+        _exact(value, (*_VIEW, *flag_keys(value)))
+        if (value["schema"] != VIEW_SCHEMA
+                or deployment({key: value[key] for key in _DOMAIN}) != deployment(pins)
+                or value["source"] != "operator_local_native_and_controller_observed_chain"
+                or type(value["tradingEnabled"]) is not bool
+                or type(value["admission"]) is not str
+                or _REASON.fullmatch(value["admission"]) is None
+                or (value["tradingEnabled"] and value["admission"] != "open")):
+            fail()
+        observed = uint(value["observed_at_ms"], nonzero=True)
+        readiness = _readiness(value["readiness"], pins, observed, value["tradingEnabled"])
+        market = value["market"]
+        _exact(market, ("symbol", "tick_size", "step_size", "fairlag_ms", "book", "mark"))
+        tick, step = market["tick_size"], market["step_size"]
+        _decimal(tick, positive=True)
+        _decimal(step, positive=True)
+        uint(market["fairlag_ms"])
+        book = market["book"]
+        _exact(book, ("source", "snapshot", "depth", "bids", "asks"))
+        if (market["symbol"] != "BTCUSDC" or book["source"] != "native_matcher"
+                or book["snapshot"] is not True or type(book["depth"]) is not int
+                or book["depth"] != 20):
+            fail()
+        bids, asks = _levels(book["bids"]), _levels(book["asks"])
+        mark = market["mark"]
+        _exact(mark, ("price_micros", "observed_at_ms"))
+        if (mark["price_micros"] is None) != (mark["observed_at_ms"] is None):
+            fail()
+        mark_price = None
+        if mark["price_micros"] is not None:
+            mark_price = micros(uint(mark["price_micros"], nonzero=True))
+            uint(mark["observed_at_ms"])
+        account = value["account"]
+        _exact(account, ("soft", "settled", "settled_final"))
+        soft = account["soft"]
+        if soft is not None:
+            _exact(soft, _SOFT)
+            for key in ("wallet_balance", "realized_pnl", "funding_paid", "position_quantity"):
+                _signed(soft[key])
+            for key in ("reserved_order_margin", "locked_position_margin"):
+                _signed(soft[key], signed=False)
+            if soft["position_entry_price"] is not None:
+                _signed(soft["position_entry_price"], signed=False)
+            soft = dict(soft)
+        settled, settled_final = _settled(account["settled"]), _settled(account["settled_final"])
+        if (settled_final is not None and settled_final["finalized_at_block"] is None) or (
+                soft is None and (settled is not None or settled_final is not None)):
+            fail()
+        orders = value["orders"]
+        if type(orders) is not list or len(orders) > 64:
+            fail()
+        order_rows = []
+        for row in orders:
+            status = row.get("status") if type(row) is dict else None
+            if status not in ORDER_STATUSES:
+                fail()
+            pending = status == "pending"
+            _exact(row, ("order_id", "status", "lineage", "admitted_at_ms",
+                         *(() if pending else ("detail",))))
+            fixed(row["order_id"], 32, nonzero=True)
+            uint(row["lineage"])
+            uint(row["admitted_at_ms"])
+            order = {"order_id": row["order_id"], "status": status, "lineage": row["lineage"],
+                     "admitted_at_ms": row["admitted_at_ms"]}
+            if not pending:
+                detail = row["detail"]
+                _exact(detail, _ORDER_DETAIL)
+                if (detail["side"] not in ("buy", "sell")
+                        or detail["kind"] not in ("limit", "market")
+                        or detail["time_in_force"] not in ("GTC", "IOC", "FOK")
+                        or type(detail["post_only"]) is not bool
+                        or type(detail["reduce_only"]) is not bool):
+                    fail()
+                lots, filled = int(uint(detail["quantity_lots"])), int(uint(detail["filled_lots"]))
+                if filled > lots:
+                    fail()
+                order.update(
+                    side=detail["side"].upper(), order_type=detail["kind"].upper(),
+                    time_in_force=detail["time_in_force"],
+                    price=times(detail["limit_price_ticks"], tick),
+                    quantity=times(detail["quantity_lots"], step),
+                    filled=times(detail["filled_lots"], step),
+                    remaining=times(str(lots - filled), step),
+                    expires_at_ms=uint(detail["expires_at_ms"]),
+                    post_only=detail["post_only"], reduce_only=detail["reduce_only"])
+            order_rows.append(order)
+        fills = value["fills"]
+        if type(fills) is not list or len(fills) > 64:
+            fail()
+        fill_rows = []
+        for row in fills:
+            _exact(row, _FILL)
+            if (row["kind"] not in ("fill", "liquidation", "close")
+                    or row["role"] not in ("taker", "maker") or row["side"] not in ("buy", "sell")):
+                fail()
+            for key in ("position", "at_ms", "batch_number", "lineage"):
+                uint(row[key])
+            fixed(row["order_id"], 32, nonzero=True)
+            fill_rows.append({
+                "position": row["position"], "at_ms": row["at_ms"], "kind": row["kind"],
+                "role": row["role"], "side": row["side"].upper(), "order_id": row["order_id"],
+                "price": times(uint(row["price_ticks"], nonzero=True), tick),
+                "quantity": times(uint(row["quantity_lots"], nonzero=True), step),
+                "fee": _signed(row["fee"]), "batch_number": row["batch_number"],
+                "lineage": row["lineage"], "settlement": _fill_settlement(row["settlement"])})
+        history = value["history"]
+        _exact(history, ("order_count", "fill_count", "row_limit", "orders_truncated",
+                         "fills_truncated"))
+        uint(history["order_count"])
+        uint(history["fill_count"])
+        if (type(history["row_limit"]) is not int or history["row_limit"] != 64
+                or type(history["orders_truncated"]) is not bool
+                or type(history["fills_truncated"]) is not bool):
+            fail()
+    except AgentError:
+        raise AgentError("response_invalid") from None
+    return {"schema": VIEW_SCHEMA, "observed_at_ms": observed,
+            "trading_enabled": value["tradingEnabled"], "admission": value["admission"],
+            "readiness": readiness,
+            "market": {"symbol": "BTCUSDC", "tick_size": tick, "step_size": step,
+                       "fairlag_ms": market["fairlag_ms"], "bids": bids, "asks": asks,
+                       "mark_price": mark_price, "mark_observed_at_ms": mark["observed_at_ms"]},
+            "account": soft, "settled": settled, "settled_final": settled_final,
+            "orders": order_rows, "fills": fill_rows, "history": dict(history)}

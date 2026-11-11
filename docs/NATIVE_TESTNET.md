@@ -5,12 +5,14 @@ and exact-original recovery guide are in
 [experimental/native-testnet](../experimental/native-testnet/README.md).
 
 From version 0.3.0 the client speaks the TS2 testnet with the same calls as before.
-Version 0.3.1 pins TS2 season 2. It accepts only season 2 TS2 bot keys
-(`fairvenue-ts2-testnet-agent-v1`). A V4 key file is refused with "TS2: create a new
-bot key" and a TS2 season 1 key as a key of a previous deployment.
+Version 0.4.0 pins TS2 season 2 and adds the signed account read `account()`,
+`submit()` with one context read per command and slippage-bounded MARKET orders. It
+accepts only season 2 TS2 bot keys (`fairvenue-ts2-testnet-agent-v1`). A V4 key file is
+refused with "TS2: create a new bot key" and a TS2 season 1 key as a key of a previous
+deployment.
 
-Coding agents can use the same client through the optional MCP server: setup,
-market data, signed orders within user-set limits and recovery. See
+Coding agents can use the same client through the optional MCP server: setup, account
+and market data, signed orders within user-set limits and recovery. See
 [MCP.md](MCP.md).
 
 This is release preparation, not hosted access, proof acceptance or public GO.

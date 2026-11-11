@@ -86,6 +86,16 @@ def utc(milliseconds: int) -> str:
     )
 
 
+def settlement_view(settlement: Mapping[str, Any]) -> dict[str, Any]:
+    """A trade's or fill's TS2 settlement state, with its settle transaction link."""
+    state = settlement.get("state")
+    view: dict[str, Any] = {"state": state if state in SETTLEMENT_STATES else "unknown"}
+    transaction = settlement.get("transaction_hash")
+    if isinstance(transaction, str) and _HASH.fullmatch(transaction):
+        view["settle_tx"] = EXPLORER_TX + transaction
+    return view
+
+
 @dataclass(frozen=True)
 class Level:
     price: Decimal
@@ -106,18 +116,13 @@ class Trade:
     settlement: Mapping[str, Any]
 
     def view(self) -> dict[str, Any]:
-        state = self.settlement.get("state")
-        settlement: dict[str, Any] = {"state": state if state in SETTLEMENT_STATES else "unknown"}
-        transaction = self.settlement.get("transaction_hash")
-        if isinstance(transaction, str) and _HASH.fullmatch(transaction):
-            settlement["settle_tx"] = EXPLORER_TX + transaction
         view: dict[str, Any] = {
             "trade_id": self.trade_id,
             "price": fmt(self.price),
             "quantity": fmt(self.quantity),
             "taker_side": self.taker_side,
             "time": utc(self.time_ms),
-            "settlement": settlement,
+            "settlement": settlement_view(self.settlement),
         }
         if self.batch is not None:
             view["batch"] = self.batch
@@ -324,8 +329,8 @@ def market_view(market: Market, *, depth: int, trades: int) -> dict[str, Any]:
             "step_size": fmt(market.step_size),
             "fairlag_ms": str(market.fairlag_ms),
             "default_leverage": market.default_leverage,
-            "order_types": "LIMIT only: GTC (optionally post-only) or price-protected IOC. "
-            "Prices must be whole ticks and sizes whole steps.",
+            "order_types": "LIMIT (GTC, post-only GTC, IOC or FOK) and MARKET (IOC or FOK, "
+            "bounded by max_slippage_bps). Prices must be whole ticks and sizes whole steps.",
         },
         "finality": "soft operator-trusted snapshot, not proof-verified or L1-final",
     }

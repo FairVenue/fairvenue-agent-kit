@@ -219,9 +219,7 @@ def _retired_installation(path: Path) -> str | None:
 def load_installation(config: Config) -> NativeTestnetInstallation:
     path = config.installation_file
     if not path.exists():
-        raise SetupError(
-            "Deployment pins are not installed yet. Call install_deployment_pins first."
-        )
+        raise SetupError("Deployment pins are not installed yet. Call connect_account first.")
     _real(path)
     try:
         return load_native_testnet_installation(

@@ -39,6 +39,9 @@ _RIGHTS = {"order": ts2.TRADE, "set_fee_mode": ts2.TRADE, "set_leverage": ts2.TR
            "cancel": ts2.CANCEL, "kill_all": ts2.CANCEL, "set_dms": ts2.DEAD_MAN_SWITCH}
 _TIME_IN_FORCE = {"GTC": 0, "IOC": 1, "FOK": 2}
 _INFO = "/api/v1/info"
+_READ = "/v1/ts2/agent/read"
+#: Browser parity: a signed account read is valid for 30 seconds (server cap 60 s).
+READ_LIFETIME_MS = 30_000
 
 
 def _wire(value):
@@ -60,9 +63,15 @@ def _nonce():
 
 
 def _order(value):
-    """The order shape kept from earlier releases: decimal price and quantity."""
+    """The order shape kept from earlier releases: decimal price and quantity.
+
+    A MARKET order with ``price`` None may add ``max_slippage_bps`` (1 to 1,000,
+    default 50, the browser's 0.5%): the signed bound is that far beyond the
+    best opposite price, or the mark when that side is empty.
+    """
+    optional = ("max_slippage_bps",) if type(value) is dict and "max_slippage_bps" in value else ()
     exact(value, ("symbol", "side", "order_type", "time_in_force", "price", "quantity",
-                  "reduce_only", "post_only"))
+                  "reduce_only", "post_only", *optional))
     market = value["order_type"] == "MARKET"
     if (value["symbol"] != "BTCUSDC" or value["side"] not in ("BUY", "SELL")
             or value["order_type"] not in ("LIMIT", "MARKET")
@@ -72,9 +81,26 @@ def _order(value):
             or type(value["quantity"]) is not str
             or (market and (value["time_in_force"] == "GTC" or value["post_only"]))
             or (value["post_only"] and value["time_in_force"] != "GTC")
-            or not (type(value["price"]) is str or (market and value["price"] is None))):
+            or not (type(value["price"]) is str or (market and value["price"] is None))
+            or (optional and not (market and value["price"] is None))):
         fail("invalid_order")
+    if optional:
+        ts2.slippage_bps(value["max_slippage_bps"])
     return dict(value)
+
+
+def _admitted_while_closed(reasons, chosen):
+    """Whether ``chosen`` may still be sent while admission is closed.
+
+    Cancels and kill-all always go to the server, which decides (they reduce
+    risk, and ``funding_owed`` admits only them). A lagging mark
+    (``mark_lagging`` alone) also admits reduce-only orders. Everything else
+    is refused locally before anything is signed.
+    """
+    kind = chosen["type"]
+    if kind in ("cancel", "kill_all"):
+        return True
+    return kind == "place" and chosen["order"]["reduce_only"] and reasons == ["mark_lagging"]
 
 
 def _ui_action(value):
@@ -252,6 +278,7 @@ class NativeTestnetClient:
         # Exact published deployment pins, never discovered from an API response.
         self.settlement, self.config_hash = self._pins["settlement"], self._pins["config_hash"]
         self._busy, self._inflight, self._loop, self._closed = False, set(), None, False
+        self._last_context = None
         self._signer, self._post, self._market = signer, transport.post, None
         if signer in _SIGNERS:
             fail("busy")
@@ -339,7 +366,7 @@ class NativeTestnetClient:
 
         async def post(path, value):
             data = await bounded(lambda:self._post(path,_wire(value),min(15,deadline-time.monotonic())))
-            return ts2.parse_json(data, 131072 if path == _INFO else 16384)
+            return ts2.parse_json(data, 131072 if path in (_INFO, _READ) else 16384)
 
         async def sign(message):
             signature = await bounded(lambda:self._signer.sign_bytes(message))
@@ -374,12 +401,50 @@ class NativeTestnetClient:
                            "agent_public_key":material["agent_public_key"],"challenge":challenge,
                            "signature":signature})
         context, server_next = ts2.context_copy(reply, self._pins, self._grant, challenge)
+        self._last_context = copy.deepcopy(context)
         # Never below a security command nonce this key already signed.
         next_nonce = max(int(server_next), highest + 1)
         if next_nonce > ts2.U64:
             fail("context_changed")
         return {"context":context, "public_grant":copy.deepcopy(self._grant),
                 "next_nonce":str(next_nonce), "next_command_nonce":server_next}
+
+    def last_context(self):
+        """The latest validated signed context (a copy), or None before any.
+
+        After a local or server ``admission_closed`` its ``admission["reasons"]``
+        says why. Public data only, never admission authority.
+        """
+        return copy.deepcopy(self._last_context)
+
+    async def account(self, *, with_context=True, timeout_ms=15000):
+        """The bot-signed account read on ``/v1/ts2/agent/read``. No order or nonce.
+
+        Returns ``{"context", "view"}``: the signed context (fee mode, leverage,
+        admission, or None without ``with_context``) and the strict view
+        (``ts2.view_copy``): balances and margins, the position, the latest
+        orders and fills with their settlement state, the book and the mark.
+        Works while an original is pending. Soft, operator-trusted state.
+        """
+        if type(with_context) is not bool:
+            fail()
+
+        async def work(post, sign, check):
+            context = None
+            if with_context:
+                context = (await self._context(post, sign, self._custody.read()[1]))["context"]
+            material = self._grant["material"]
+            now = int(time.time() * 1000)
+            expires = min(now + READ_LIFETIME_MS, int(material["expires_at_ms"]))
+            if expires <= now:
+                fail("context_changed")
+            account_key = material["account_key"]
+            message = ts2.read_signing_message(self._pins, account_key, str(expires))
+            request = ts2.read_request(self._pins, account_key, material["agent_public_key"],
+                                       str(expires), await sign(message), self._crypto)
+            view = ts2.view_copy(await post(_READ, request), self._pins)
+            return {"context": context, "view": view}
+        return await self._operation(timeout_ms, work)
 
     async def snapshot(self, *, timeout_ms=15000):
         """Signed agent context: account fee mode, leverage, batch, admission, the
@@ -397,7 +462,7 @@ class NativeTestnetClient:
                 self._market["tick_size"],self._market["step_size"]):
             fail("context_changed")
         self._market = {"tick_size":rules["tick_size"],"step_size":rules["step_size"],
-                        "best_bid":None,"best_ask":None}
+                        "best_bid":None,"best_ask":None,"mark_price":None}
         return rules
 
     async def market_rules(self, *, timeout_ms=15000):
@@ -414,10 +479,14 @@ class NativeTestnetClient:
             side = order["side"]
             if order["order_type"] == "MARKET":
                 if order["price"] is None:
+                    # Browser parity: the best opposite price, else the mark.
                     opposite = rules["best_ask"] if side == "BUY" else rules["best_bid"]
-                    if opposite is None:
-                        fail("invalid_order")  # No opposite liquidity to bound against.
-                    ticks = ts2.protection_ticks(opposite, rules["tick_size"], side)
+                    reference = opposite if opposite is not None else rules["mark_price"]
+                    if reference is None:
+                        fail("invalid_order")  # Nothing to bound the order against.
+                    ticks = ts2.protection_ticks(
+                        reference, rules["tick_size"], side,
+                        order.get("max_slippage_bps", ts2.DEFAULT_SLIPPAGE_BPS))
                 else:
                     # A chosen bound rounds away from the book: never tighter than chosen.
                     ticks = ts2.units(order["price"], rules["tick_size"],
@@ -504,54 +573,84 @@ class NativeTestnetClient:
         raises ``AgentError`` with its reason: ``invalid_request``, ``rejected``,
         ``admission_closed`` or ``rate_limited`` (sign a fresh request). Any
         other failure is ``outcome_unknown``: the original stays retained until
-        ``recover_original()`` resolves it.
+        ``recover_original()`` resolves it. While the signed context shows
+        admission closed, only cancels, kill-all and (under ``mark_lagging``)
+        reduce-only orders are signed. Anything else raises ``admission_closed``
+        before signing: ``last_context()`` names the reason.
         """
         exact(input,("nonce","expiresAtMs","action"))
         chosen = _ui_action(input["action"])
         nonce = ts2.uint(input["nonce"],nonzero=True)
         expires = ts2.uint(input["expiresAtMs"],nonzero=True)
-        async def work(post,sign,check):
-            if self._original() is not None:
-                fail("outcome_unknown")
-            revision,highest,_ = self._custody.read()
-            snapshot = await self._context(post,sign,highest)
-            if nonce != snapshot["next_nonce"]:
-                fail("nonce_reused")
-            context, material = snapshot["context"], self._grant["material"]
-            kind = chosen["type"]
-            if kind in ("fee_mode","leverage") and context["account_settings_enabled"] is False:
-                fail("admission_closed")  # The server would refuse it. Nothing is signed.
-            if (kind not in ("cancel","kill_all")
-                    and not int(context["protocol_time_ms"]) < int(expires) <= int(material["expires_at_ms"])):
-                fail("context_changed")
-            rules = None
-            if kind == "place":
-                order = chosen["order"]
-                rules = await self._rules(post, order["order_type"] == "MARKET" and order["price"] is None)
-            action = self._ts2_action(chosen,nonce,expires,context,rules)
-            if not material["permissions"] & _RIGHTS[action["type"]]:
-                fail()
-            message, order_id = ts2.signing_message(self._pins,material["account_key"],
-                                                    material["agent_public_key"],action,self._crypto)
-            request = ts2.request_copy({"schema":ts2.REQUEST_SCHEMA,**self._pins,
-                                        "account_key":material["account_key"],
-                                        "agent_public_key":material["agent_public_key"],
-                                        "signature":await sign(message),"action":action},
-                                       self._pins,self._crypto)
-            check()
-            pending = {"schema":PENDING_SCHEMA,"request":request}
-            # A signed security nonce is never signed again, whatever its outcome.
-            floor = max(highest,int(nonce)) if action["type"] in ts2.SECURITY else highest
-            self._custody.change(revision,floor,pending)
-            self._original()  # Read back and locally authenticate before send.
-            try:
-                reply = await post("/v1/agent/admit",request)
-            except AdmitRefusal as refusal:
-                self._not_placed(refusal,pending)
-                raise
-            ack = ts2.ack_copy(reply,request,ts2.request_sha256(request),order_id)
-            recovery = await self._recover(post)
-            if recovery["status"] not in ts2.TERMINAL:
-                fail("outcome_unknown")
-            return {"ack":ack,"recovery":recovery}
-        return await self._operation(timeout_ms,work)
+        return await self._operation(timeout_ms, lambda post,sign,check: self._admit(
+            post,sign,check,chosen,lambda snapshot: (nonce,expires)))
+
+    async def submit(self, action, *, lifetime_ms, timeout_ms=60000):
+        """``run`` with ONE signed context read: its nonce and expiry come from it.
+
+        ``action`` is a ``run`` action. The expiry is ``lifetime_ms`` after the
+        later of this machine's clock and the server's protocol time, never past
+        the key's expiry: up to 23 hours for a resting order, 30 seconds for a
+        one-shot order or account command (the browser's lifetimes). Results and
+        errors are exactly those of ``run``.
+        """
+        chosen = _ui_action(action)
+        if type(lifetime_ms) is not int or not 1_000 < lifetime_ms <= GTC_LIFETIME_MS:
+            fail()
+
+        def pick(snapshot):
+            now = max(int(time.time() * 1000), int(snapshot["context"]["protocol_time_ms"]))
+            key_expiry = int(self._grant["material"]["expires_at_ms"])
+            return snapshot["next_nonce"], str(min(now + lifetime_ms, key_expiry))
+        return await self._operation(timeout_ms, lambda post,sign,check: self._admit(
+            post,sign,check,chosen,pick))
+
+    async def _admit(self, post, sign, check, chosen, pick):
+        """One signed context read, then at most one signature and one admit."""
+        if self._original() is not None:
+            fail("outcome_unknown")
+        revision,highest,_ = self._custody.read()
+        snapshot = await self._context(post,sign,highest)
+        nonce, expires = pick(snapshot)
+        if nonce != snapshot["next_nonce"]:
+            fail("nonce_reused")
+        context, material = snapshot["context"], self._grant["material"]
+        kind = chosen["type"]
+        admission = context["admission"]
+        if not admission["open"] and not _admitted_while_closed(admission["reasons"], chosen):
+            fail("admission_closed")  # Nothing is signed. last_context() says why.
+        if kind in ("fee_mode","leverage") and context["account_settings_enabled"] is False:
+            fail("admission_closed")  # The server would refuse it. Nothing is signed.
+        if (kind not in ("cancel","kill_all")
+                and not int(context["protocol_time_ms"]) < int(expires) <= int(material["expires_at_ms"])):
+            fail("context_changed")
+        rules = None
+        if kind == "place":
+            order = chosen["order"]
+            rules = await self._rules(post, order["order_type"] == "MARKET" and order["price"] is None)
+        action = self._ts2_action(chosen,nonce,expires,context,rules)
+        if not material["permissions"] & _RIGHTS[action["type"]]:
+            fail()
+        message, order_id = ts2.signing_message(self._pins,material["account_key"],
+                                                material["agent_public_key"],action,self._crypto)
+        request = ts2.request_copy({"schema":ts2.REQUEST_SCHEMA,**self._pins,
+                                    "account_key":material["account_key"],
+                                    "agent_public_key":material["agent_public_key"],
+                                    "signature":await sign(message),"action":action},
+                                   self._pins,self._crypto)
+        check()
+        pending = {"schema":PENDING_SCHEMA,"request":request}
+        # A signed security nonce is never signed again, whatever its outcome.
+        floor = max(highest,int(nonce)) if action["type"] in ts2.SECURITY else highest
+        self._custody.change(revision,floor,pending)
+        self._original()  # Read back and locally authenticate before send.
+        try:
+            reply = await post("/v1/agent/admit",request)
+        except AdmitRefusal as refusal:
+            self._not_placed(refusal,pending)
+            raise
+        ack = ts2.ack_copy(reply,request,ts2.request_sha256(request),order_id)
+        recovery = await self._recover(post)
+        if recovery["status"] not in ts2.TERMINAL:
+            fail("outcome_unknown")
+        return {"ack":ack,"recovery":recovery}

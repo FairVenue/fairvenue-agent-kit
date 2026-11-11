@@ -62,6 +62,74 @@ def market(fixture, **changes):
     return value
 
 
+def view(fixture, **changes):
+    """One ``/v1/ts2/agent/read`` reply exactly as ``views.rs project`` and
+    ``Gateway::read`` build it: the view plus observed time, readiness and the
+    trading flag."""
+    now = fixture.context["protocol_time_ms"]
+    later = str(int(now) + 3_600_000)
+    chain = {"state": "controller_observed_settled_final", "state_root": "0x" + "11" * 32,
+             "transaction_hash": "0x" + "22" * 32, "block_hash": "0x" + "33" * 32,
+             "block_number": "100", "finalized_at_block": "110"}
+    value = {
+        "schema": ts2.VIEW_SCHEMA, **ts2.PINS,
+        "source": "operator_local_native_and_controller_observed_chain", "observed_at_ms": now,
+        "market": {"symbol": "BTCUSDC", "tick_size": "0.1", "step_size": "0.001",
+                   "fairlag_ms": "100",
+                   "book": {"source": "native_matcher", "snapshot": True, "depth": 20,
+                            "bids": [{"price": "79999.9", "quantity": "0.02"}],
+                            "asks": [{"price": "80000.2", "quantity": "0.01"}]},
+                   "mark": {"price_micros": "80000050000", "observed_at_ms": now}},
+        "account": {
+            "soft": {"wallet_balance": "1000.5", "reserved_order_margin": "8",
+                     "locked_position_margin": "16.0005", "realized_pnl": "-1.25",
+                     "funding_paid": "0.01", "position_quantity": "-0.002",
+                     "position_entry_price": "80010"},
+            "settled": {"batch_number": "6", "lineage": "1", "state_root": "0x" + "11" * 32,
+                        "transaction_hash": "0x" + "22" * 32, "block_hash": "0x" + "33" * 32,
+                        "block_number": "100", "finalized_at_block": None,
+                        "wallet_balance": "1000", "realized_pnl": "0", "funding_paid": "0",
+                        "position_quantity": "0", "exit_micros": "1000000000"},
+            "settled_final": None},
+        "orders": [
+            {"order_id": "0x" + "aa" * 32, "status": "partially_filled", "lineage": "1",
+             "admitted_at_ms": now,
+             "detail": {"side": "buy", "kind": "limit", "time_in_force": "GTC",
+                        "limit_price_ticks": "799900", "quantity_lots": "3", "filled_lots": "1",
+                        "expires_at_ms": later, "post_only": True, "reduce_only": False}},
+            # FairLag-held: never its side, price or size.
+            {"order_id": "0x" + "bb" * 32, "status": "pending", "lineage": "1",
+             "admitted_at_ms": now},
+            {"order_id": "0x" + "cc" * 32, "status": "filled", "lineage": "1",
+             "admitted_at_ms": now,
+             "detail": {"side": "sell", "kind": "market", "time_in_force": "IOC",
+                        "limit_price_ticks": "796000", "quantity_lots": "2", "filled_lots": "2",
+                        "expires_at_ms": later, "post_only": False, "reduce_only": False}}],
+        "fills": [
+            {"position": "14", "at_ms": now, "batch_number": "0", "lineage": "1",
+             "kind": "fill", "role": "taker", "side": "sell", "order_id": "0x" + "cc" * 32,
+             "price_ticks": "800002", "quantity_lots": "2", "fee": "0.0192",
+             "settlement": {"state": "operator_soft"}},
+            {"position": "12", "at_ms": now, "batch_number": "6", "lineage": "1",
+             "kind": "fill", "role": "maker", "side": "buy", "order_id": "0x" + "aa" * 32,
+             "price_ticks": "799900", "quantity_lots": "1", "fee": "-0.0024",
+             "settlement": chain}],
+        "history": {"order_count": "3", "fill_count": "2", "row_limit": 64,
+                    "orders_truncated": False, "fills_truncated": False},
+        "admission": "open", "tradingEnabled": True, "proofVerified": False,
+        "publicFinality": False, "publicReleaseGo": False,
+        "readiness": {"schema": ts2.READINESS_SCHEMA,
+                      "source": "operator_single_provider_rpc_and_native_writer", **ts2.PINS,
+                      "enabled": True, "reason": "open", "observed_at_ms": now,
+                      "chain_block_number": "5", "chain_block_hash": "0x" + "44" * 32,
+                      "chain_block_time_ms": str(int(now) - 2_000),
+                      "captured_at_ms": str(int(now) - 1_000),
+                      "expires_at_ms": str(int(now) + 14_400_000)},
+    }
+    value.update(changes)
+    return value
+
+
 class NativeFixture:
     """A synthetic TS2 participant service: context, public market, admit, recovery."""
 
@@ -83,7 +151,7 @@ class NativeFixture:
                         "admission": {"open": True, "reasons": []}}
         self.command_nonce = 0  # The last applied security command nonce.
         self.journal = {}  # request_sha256 -> exact request
-        self.calls = {"context": 0, "info": 0, "admit": 0, "recovery": 0}
+        self.calls = {"context": 0, "info": 0, "admit": 0, "recovery": 0, "read": 0}
         self.requests, self.signed = [], []
         self.lost_reply = False
         self.refusal = None  # request -> (status, body); status None is an unknown failure.
@@ -91,8 +159,9 @@ class NativeFixture:
         # A not_placed lookup always names its reason (service.rs
         # validate_ts2_agent_reply): rejected or expired_never_admitted.
         self.recovery_reason = "rejected"
-        self.recovery_edit = self.context_edit = self.ack_edit = None
+        self.recovery_edit = self.context_edit = self.ack_edit = self.view_edit = None
         self.market = market(self)
+        self.view = view(self)
 
     def export(self, **changes):
         """The browser's TS2 bot key download for this fixture's key."""
@@ -149,6 +218,26 @@ class NativeFixture:
             self.calls["info"] += 1
             assert value == {"type": "native_market"}
             return body(self.market)
+        if path == "/v1/ts2/agent/read":
+            # read_auth.rs: kind 1, zero target, expiry in (now, now + 60 s], no nonce.
+            self.calls["read"] += 1
+            assert set(value) == {"schema", "chain_id", "settlement", "config_hash",
+                                  "account_key", "agent_public_key", "expires_at_ms",
+                                  "signature"}
+            assert value["schema"] == ts2.READ_SCHEMA
+            assert {key: value[key] for key in ts2.PINS} == ts2.PINS
+            assert value["account_key"] == self.grant["material"]["account_key"]
+            now = int(time.time() * 1000)
+            assert now < int(value["expires_at_ms"]) <= now + 60_000
+            message = (b"FV_TS2_READ_SIG\0" + bytes.fromhex(ts2.CONFIG_HASH[2:]) + b"\x01"
+                       + (7).to_bytes(8, "big") + bytes(32)
+                       + int(value["expires_at_ms"]).to_bytes(8, "big"))
+            assert self.crypto.verify(value["signature"], message, self.signer.public_key)
+            self.signed.append(value["signature"])
+            reply = copy.deepcopy(self.view)
+            if self.view_edit:
+                self.view_edit(reply)
+            return body(reply)
         request = ts2.request_copy(value, ts2.PINS, self.crypto)  # Exact signature check.
         digest = ts2.request_sha256(request)
         if path == "/v1/agent/admit":
@@ -268,7 +357,8 @@ class NativeTestnetTests(unittest.IsolatedAsyncioTestCase):
                                           action, self.fixture.crypto)
         self.assertEqual(ack["order_id"], order_id)
         self.assertEqual(ack["request_sha256"], ts2.request_sha256(admitted[0]))
-        self.assertEqual(self.fixture.calls, {"context": 2, "info": 1, "admit": 1, "recovery": 1})
+        self.assertEqual(self.fixture.calls,
+                         {"context": 2, "info": 1, "admit": 1, "recovery": 1, "read": 0})
         self.assertNotIn(SEED[2:], Path(self.directory, "original.sqlite").read_bytes().hex())
         # Market rules are cached: the next order needs no second public read.
         await self.run_action(self.fixture.order(side="SELL", price="80010"))
@@ -318,7 +408,8 @@ class NativeTestnetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(chosen["limit_price_ticks"], "804001")
         # A computed bound reads fresh best prices. A chosen bound needs only the tick.
         self.assertEqual(self.fixture.calls["info"], 2)
-        self.fixture.market = market(self.fixture, asks=[])
+        # No ask and no mark: nothing to bound a BUY against.
+        self.fixture.market = market(self.fixture, asks=[], mark_price=None)
         with self.assertRaises(AgentError) as caught:
             await self.run_action(self.fixture.order(order_type="MARKET", time_in_force="IOC",
                                                      price=None))
@@ -492,6 +583,126 @@ class NativeTestnetTests(unittest.IsolatedAsyncioTestCase):
             self.fixture.ack_edit = None
             self.assertEqual((await self.client.recover_original())["status"], "accepted")
 
+    async def test_signed_account_read_parses_the_server_view_exactly(self):
+        result = await self.client.account()
+        context, account = result["context"], result["view"]
+        self.assertEqual((context["fee_mode"], context["leverage"]), (0, "10"))
+        self.assertEqual(account["account"]["wallet_balance"], "1000.5")
+        self.assertEqual(account["account"]["position_quantity"], "-0.002")
+        self.assertEqual(account["market"]["mark_price"], "80000.05")
+        resting, held, filled = account["orders"]
+        self.assertEqual((resting["side"], resting["order_type"], resting["price"]),
+                         ("BUY", "LIMIT", "79990"))
+        self.assertEqual((resting["quantity"], resting["filled"], resting["remaining"]),
+                         ("0.003", "0.001", "0.002"))
+        self.assertEqual(set(held), {"order_id", "status", "lineage", "admitted_at_ms"})
+        self.assertEqual(filled["time_in_force"], "IOC")
+        soft, settled = account["fills"]
+        self.assertEqual((soft["price"], soft["quantity"], soft["fee"]), ("80000.2", "0.002", "0.0192"))
+        self.assertEqual(soft["settlement"], {"state": "operator_soft"})
+        self.assertEqual(settled["settlement"]["finalized_at_block"], "110")
+        self.assertEqual(account["readiness"]["reason"], "open")
+        self.assertEqual(self.fixture.calls["context"], 1)
+        self.assertEqual(self.fixture.calls["read"], 1)
+        self.assertEqual(self.fixture.calls["admit"], 0)
+        # Without the context: one signed read only.
+        alone = await self.client.account(with_context=False)
+        self.assertIsNone(alone["context"])
+        self.assertEqual(self.fixture.calls["context"], 1)
+        # An empty account (no credit yet) is a valid reply.
+        self.fixture.view_edit = lambda r: r.update(
+            account={"soft": None, "settled": None, "settled_final": None}, orders=[], fills=[])
+        self.assertIsNone((await self.client.account())["view"]["account"])
+
+    async def test_account_read_refuses_unbound_or_malformed_views(self):
+        edits = (
+            lambda r: r.update(settlement="0x" + "09" * 20),
+            lambda r: r.update(proofVerified=True),
+            lambda r: r.update(tradingEnabled=True, admission="funding_owed"),
+            lambda r: r.update(private_key_seed=SEED),
+            lambda r: r["market"]["book"].update(depth=19),
+            lambda r: r["account"]["soft"].update(wallet_balance=1000.5),
+            lambda r: r["account"]["soft"].update(reserved_order_margin="-1"),
+            lambda r: r["orders"][1].update(detail={}),
+            lambda r: r["orders"][0].update(status="open"),
+            lambda r: r["orders"][0]["detail"].update(filled_lots="4"),
+            lambda r: r["fills"][0].update(settlement={"state": "proven"}),
+            lambda r: r["fills"][1]["settlement"].update(finalized_at_block=None),
+            lambda r: r["readiness"].update(enabled=False),
+            lambda r: r["readiness"].update(source="operator_independent_l1"),
+            lambda r: r["history"].update(row_limit=65),
+        )
+        for edit in edits:
+            self.fixture.view_edit = edit
+            with self.subTest(edit=edit), self.assertRaises(AgentError) as caught:
+                await self.client.account(with_context=False)
+            self.assertEqual(caught.exception.code, "response_invalid")
+        self.assertFalse(self.client.has_pending_request())
+
+    async def test_submit_reads_the_context_once_and_picks_nonce_and_expiry(self):
+        start = int(time.time() * 1000)
+        result = await self.client.submit(self.fixture.order(), lifetime_ms=3_600_000)
+        self.assertEqual(result["recovery"]["status"], "accepted")
+        self.assertEqual((self.fixture.calls["context"], self.fixture.calls["admit"]), (1, 1))
+        expires = int(self.fixture.admitted()[0]["action"]["expires_at_ms"])
+        self.assertTrue(start + 3_600_000 <= expires <= int(time.time() * 1000) + 3_600_000)
+        await self.client.submit({"type": "leverage", "leverage": "3"}, lifetime_ms=30_000)
+        self.assertEqual(self.fixture.admitted()[-1]["action"]["command_nonce"], "1")
+        for lifetime in (1_000, 23 * 60 * 60 * 1000 + 1, "60000"):
+            with self.subTest(lifetime=lifetime), self.assertRaises(AgentError):
+                await self.client.submit(self.fixture.order(), lifetime_ms=lifetime)
+        self.assertEqual(self.fixture.calls["admit"], 2)
+
+    async def test_closed_admission_refuses_locally_before_signing(self):
+        self.fixture.context["admission"] = {"open": False, "reasons": ["funding_owed"]}
+        for action in (self.fixture.order(), self.fixture.order(reduce_only=True),
+                       {"type": "leverage", "leverage": "2"},
+                       {"type": "dead_man_switch", "deadline_ms": "0"}):
+            with self.subTest(action=action), self.assertRaises(AgentError) as caught:
+                await self.client.submit(action, lifetime_ms=30_000)
+            self.assertEqual(caught.exception.code, "admission_closed")
+        self.assertEqual(self.fixture.calls["admit"], 0)
+        self.assertFalse(self.client.has_pending_request())
+        self.assertEqual(self.client.last_context()["admission"]["reasons"], ["funding_owed"])
+        # Cancels and kill-all reduce risk: the server decides, during funding_owed too.
+        await self.client.submit({"type": "cancel", "order_id": "0x" + "aa" * 32},
+                                 lifetime_ms=30_000)
+        await self.client.submit({"type": "kill_all"}, lifetime_ms=30_000)
+        self.assertEqual(self.fixture.calls["admit"], 2)
+        # A lagging mark admits reduce-only orders, never new risk.
+        self.fixture.context["admission"] = {"open": False, "reasons": ["mark_lagging"]}
+        await self.client.submit(self.fixture.order(reduce_only=True), lifetime_ms=30_000)
+        with self.assertRaises(AgentError) as caught:
+            await self.client.submit(self.fixture.order(), lifetime_ms=30_000)
+        self.assertEqual(caught.exception.code, "admission_closed")
+        self.assertEqual(self.fixture.calls["admit"], 3)
+
+    async def test_market_orders_take_a_slippage_bound_and_fall_back_to_the_mark(self):
+        def market_order(**changes):
+            return self.fixture.order(**{"order_type": "MARKET", "time_in_force": "IOC",
+                                         "price": None, **changes})
+
+        await self.client.submit(market_order(max_slippage_bps=100), lifetime_ms=30_000)
+        # Best ask 80000.2 * 1.01 = 80800.202 -> up to 80800.3.
+        self.assertEqual(self.fixture.admitted()[-1]["action"]["limit_price_ticks"], "808003")
+        self.fixture.market = market(self.fixture, asks=[])
+        await self.client.submit(market_order(), lifetime_ms=30_000)
+        # No ask: the mark 80000.05 * 1.005 = 80400.05025 -> up to 80400.1.
+        self.assertEqual(self.fixture.admitted()[-1]["action"]["limit_price_ticks"], "804001")
+        for changes in ({"max_slippage_bps": 0}, {"max_slippage_bps": 1001},
+                        {"max_slippage_bps": "50"}, {"max_slippage_bps": 50, "price": "80000"}):
+            with self.subTest(changes=changes), self.assertRaises(AgentError) as caught:
+                await self.client.submit(market_order(**changes), lifetime_ms=30_000)
+            self.assertEqual(caught.exception.code, "invalid_order")
+        with self.assertRaises(AgentError) as caught:
+            await self.client.submit(self.fixture.order(max_slippage_bps=50), lifetime_ms=30_000)
+        self.assertEqual(caught.exception.code, "invalid_order")
+        self.fixture.market = market(self.fixture, asks=[], mark_price=None)
+        with self.assertRaises(AgentError) as caught:
+            await self.client.submit(market_order(), lifetime_ms=30_000)
+        self.assertEqual(caught.exception.code, "invalid_order")
+        self.assertEqual(self.fixture.calls["admit"], 2)
+
     async def test_custody_is_never_reinitialized_or_adopted_by_another_key(self):
         await self.run_action({"type": "kill_all"})
         self.client.close()
@@ -564,8 +775,11 @@ class TransportPathTests(unittest.IsolatedAsyncioTestCase):
         from fairvenue_schema6 import transport as module
 
         self.assertEqual(module._limit("/api/v1/info"), 131072)
+        self.assertEqual(module._limit("/v1/ts2/agent/read"), 131072)
         self.assertEqual(module._limit("/v1/agent/admit"), 16384)
         self.assertIn("/api/v1/info", module._PATHS)
+        self.assertIn("/v1/ts2/agent/read", module._PATHS)
+        self.assertNotIn("/v1/ts2/agent/exchange", module._PATHS)
 
 
 if __name__ == "__main__":

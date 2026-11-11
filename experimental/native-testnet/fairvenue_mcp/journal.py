@@ -1,8 +1,8 @@
 """Append-only local journal of this server's own actions.
 
-This server does not read the account (balance, positions, open orders,
-fills), so this journal is the agent's memory of what it submitted and how
-each request ended. It holds public action fields and outcome codes
+The journal is the agent's memory of what this server submitted and how each
+request ended. The account itself (balance, position, orders, fills) comes
+from get_account. It holds public action fields and outcome codes
 only: never seeds, signatures, signed envelopes or upstream error text.
 """
 

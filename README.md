@@ -12,21 +12,32 @@ credentials to an external venue.
 Status: early testnet tooling, not a live trading service. Pin a reviewed commit before relying on
 it. This repository does not include the FairVenue backend or grant hosted access.
 
-**TS2 season 2 (version 0.3.1).** The native TESTNET now runs TS2 season 2, a fresh deployment
-with new pins. The MCP server and the native SDK speak it from version 0.3.1. Version 0.3.0 still
-points at season 1 and can no longer connect. Tool names, tool arguments and the SDK calls are
-unchanged. Bot keys from season 1 and the older V4 testnet no longer sign, so create a new key
-once with **Create API key & download JSON**. Your account gets 1,000 test USDC once in season 2,
-right after sign-in. Then update the plugin (or the `uvx` command) and restart your agent's
-client. Season 2 proves fills only. Cancels, cancel-all and the dead man's switch are enforced by
-the operator's matching engine, not by the proof. Since 0.3.0, orders use whole ticks and steps,
-accepted orders return their `order_id` for `cancel_order`, and there is no order modify: cancel
-and place a new order. See [docs/MCP.md](docs/MCP.md).
+**TS2 season 2 (version 0.4.0).** The native TESTNET now runs TS2 season 2, a fresh deployment
+with new pins. Version 0.4.0 of the MCP server and the native SDK speaks it, and earlier
+versions cannot connect. Update once and create one new key:
+
+- Claude Code: `claude plugin marketplace update fairvenue`, then
+  `claude plugin update fairvenue@fairvenue`, then restart Claude Code.
+- Codex: `codex plugin marketplace upgrade`, then `codex plugin remove fairvenue@fairvenue` and
+  `codex plugin add fairvenue@fairvenue`, then restart Codex.
+- Other clients: see [docs/MCP.md](docs/MCP.md#update-and-create-a-new-key).
+- Then ask your agent to connect. Sign in on the key page and click
+  **Create API key & download JSON**. Keys from season 1 and the older V4 testnet are refused.
+  Your account gets 1,000 test USDC once in season 2, right after sign-in.
+
+New in 0.4.0: `get_account` (balances, margin, PnL, position, open orders and fills), MARKET
+orders with a slippage bound, FOK, `close_position`, plain-word reasons when trading is paused,
+and one signed context read per order. `modify_order`, `install_deployment_pins` and
+`verify_connection` are gone. Season 2 proves fills only. Cancels, cancel-all and the dead man's
+switch are enforced by the operator's matching engine, not by the proof.
 
 ## Start with your coding agent
 
 Install the plugin: the `fairvenue` skill teaches your agent how FairVenue works, and the MCP
-server lets it act on the native TESTNET.
+server lets it act on the native TESTNET. In Claude Code and Codex it is one command and the
+recommended path. In other clients the MCP server is optional. For hackathon prizes, use it to
+explore and build, then run a standalone bot with the native SDK (prizes need a full UTC day of
+hourly returns).
 
 **Claude Code**
 
@@ -56,20 +67,21 @@ Connect me to the FairVenue TESTNET.
 
 You only click. The agent opens the key page in your browser, where you sign in with Google and
 click **Create API key & download JSON**. It picks the key up by itself, stores it privately,
-checks the connection without placing an order and reads the market. The first time it signs an
-order, you get one dialog to allow trading for the session, with the per-order limits filled in.
-Every signed request is retained until its outcome is known, and nothing new is signed
-meanwhile, so a timeout leads to a recovery lookup instead of a blind resend. The MCP server runs
-on macOS and Linux (Windows through WSL).
+checks the connection without placing an order and reads your account and the market. The first
+time it signs an order, you get one dialog to allow trading for the session, with the per-order
+limits filled in. Every signed request is retained until its outcome is known, and nothing new
+is signed meanwhile, so a timeout leads to a recovery lookup instead of a blind resend. The MCP
+server runs on macOS and Linux (Windows through WSL). WSL and remote machines need one setting,
+see [docs/MCP.md](docs/MCP.md#wsl-and-remote-machines).
 
 What the agent gets:
 
 - **Skill:** setup, safety rules, exact-original recovery, the hackathon rules and how to build a
   standalone bot. See [skills/fairvenue/SKILL.md](skills/fairvenue/SKILL.md).
-- **MCP tools:** `connect_account`, `get_market`, `get_price_history`, `wait_for_market_update`,
-  `place_order`, `cancel_all_orders`, `set_dead_man_switch`, `recover_pending_request`,
-  `get_journal` and more, plus the prompts `onboard`, `trading_session`, `build_bot` and
-  `hackathon_plan`. See [docs/MCP.md](docs/MCP.md).
+- **MCP tools:** `connect_account`, `get_account`, `get_market`, `place_order` (LIMIT or MARKET),
+  `close_position`, `cancel_order`, `cancel_all_orders`, `set_dead_man_switch`,
+  `recover_pending_request` and more, plus the prompts `onboard`, `trading_session`, `build_bot`
+  and `hackathon_plan`. See [docs/MCP.md](docs/MCP.md).
 
 The repository is a Claude Code plugin and marketplace (`.claude-plugin/`) and a portable
 [Agent Plugin](https://agent-plugins.org) (`plugin.json`, `mcp.json` and `skills/`).

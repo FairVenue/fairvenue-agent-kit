@@ -118,6 +118,15 @@ returns the signed TS2 context (account fee mode, leverage, open batch, admissio
 `run({"nonce": snapshot["next_nonce"], "expiresAtMs": "...", "action": {...}})` signs one TS2
 request locally with one Ed25519 signature over its exact native bytes, retains that public
 original durably and sends one admit. It does not translate a V0 or V4 envelope.
+`submit(action, lifetime_ms=...)` does the same with one signed context read: it takes the
+nonce from that read and signs an expiry `lifetime_ms` ahead, never past the key's expiry.
+
+`account()` is the bot-signed account read (`/v1/ts2/agent/read`, no nonce, no order). It
+returns the signed context (fee mode, leverage, admission) and the strict view: wallet balance,
+reserved and locked margin, realized PnL, funding paid, the position and its entry price, the
+latest 64 orders and fills as exact decimal strings with each fill's settlement state, the book
+and the mark. FairLag-held orders show no side, price or size. It is soft, operator-trusted
+state.
 
 Actions keep their shape:
 
@@ -125,17 +134,25 @@ Actions keep their shape:
   `quantity`, `reduce_only` and `post_only`. Price and quantity are exact decimal strings that must
   be whole ticks and whole lots of the public market (`tick_size` and `step_size` from
   `native_market`). Off-grid input raises `invalid_order` before anything is signed. Nothing is
-  rounded. Use `LIMIT` with `GTC` (resting, `post_only` for makers) or a price-protected `IOC`, and
+  rounded. `LIMIT` takes `GTC` (resting, `post_only` for makers), `IOC` or `FOK`. Use
   `reduce_only` for closes. A `MARKET` order (`IOC` or `FOK`) signs a protection bound: its price
-  rounded away from the book, or 0.5% beyond the best opposite price when the price is `None`.
-  `expiresAtMs` is the order's lifetime: up to 23 hours for `GTC`, about 30 seconds for one-shot
-  orders, never past the key's expiry. Every order carries the account's fee mode.
+  rounded away from the book, or with `price` `None` a bound `max_slippage_bps` (an int from 1 to
+  1000, default 50, the browser's 0.5%) beyond the best opposite price, or beyond the mark when
+  that side is empty. `expiresAtMs` is the order's lifetime: up to 23 hours for `GTC`, about 30
+  seconds for one-shot orders, never past the key's expiry. Every order carries the account's fee
+  mode.
 - `cancel` with the 0x `order_id` from the order's ACK (`result["ack"]["order_id"]`).
 - `kill_all` cancels every resting and FairLag-held order of the account at once.
 - `fee_mode` (`FIXED` or `PNL`), `leverage` (`"1"` to `"100"`) and `dead_man_switch` are account
-  commands with one strictly increasing nonce per account and key. The operator can keep fee mode
-  and leverage closed (`admission_closed`).
+  commands with one strictly increasing nonce per account and key. The fee mode changes only with
+  no position and no working orders. Leverage can fall only with no position and no working
+  orders. The operator can keep fee mode and leverage closed (`admission_closed`).
 - `modify` raises `unsupported`: cancel and place a new order.
+
+While the signed context shows admission closed, `run` and `submit` sign only cancels, kill-all
+and, while the mark catches up (`mark_lagging`), reduce-only orders. Anything else raises
+`admission_closed` before anything is signed, and `client.last_context()["admission"]["reasons"]`
+says why (for example `funding_owed`, when only cancels work).
 
 Use these only with separately authorized scope. Read the reviewed package protocol rather than
 inventing a Binance-shaped action. An ACK is the operator journal's soft answer, not a fill, SP1
@@ -159,10 +176,14 @@ exact retained signed original. It never sends admit again. `accepted` (journale
 it. After those, build a new request if it is still wanted. `unresolved` or corrupt custody remain
 blocked. Only the server's exact lookup answer resolves it. Your own clock, a new batch or a moved
 nonce is not evidence. Never reset, reprice, retime, resign or resend the original. Each strategy
-or process needs a dedicated key and custody.
+or process needs a dedicated key and custody. If a request was retained but never reached the
+server, the lookup answers `unresolved` until that request's own expiry has passed, so new
+signing waits that long (30 seconds for one-shot orders and account commands, the order's
+lifetime for `GTC`).
 
-Bot routes are `/v1/agent/context`, `/prepare`, `/admit` and `/recovery`, under the fixed approved
-origin. Public reads use `/api/v1/info` with `{"type":"native_market"}`. Its SOFT book and reference
+Bot routes are `/v1/agent/context`, `/prepare`, `/admit` and `/recovery`, and the signed account
+read `/v1/ts2/agent/read`, under the fixed approved origin. Public reads use `/api/v1/info` with
+`{"type":"native_market"}`. Its SOFT book and reference
 prices are not chain freshness, proof or external liquidity. Do not use V0 WebSockets, market_id0
 or Google cookies and bearer tokens for native bots. This client has no funding, withdrawal or
 wallet signer.

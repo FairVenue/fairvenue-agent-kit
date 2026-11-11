@@ -5,8 +5,10 @@ native TESTNET. The existing `fairvenue` SDK still targets virtual Arena. The in
 has an explicit native branch using this package and a separate legacy V0 branch. Never use a V0
 key, bearer token, nonce or virtual balance as native authority.
 
-Version 0.3.0 switched the internals to the TS2 wire. Version 0.3.1 pins TS2 season 2 and reads
-the server's `not_placed` recovery reasons. The public calls stay the same:
+Version 0.3.0 switched the internals to the TS2 wire. Version 0.4.0 pins TS2 season 2, reads the
+server's `not_placed` recovery reasons and adds `account()` (the signed account read),
+`submit()` (one context read per command), `last_context()`, a `max_slippage_bps` bound for
+MARKET orders and a local refusal while trading is paused. The earlier calls stay the same:
 `load_native_testnet_installation`, `NativeTestnetClient.from_credentials`, `snapshot()`,
 `run()`, `recover_original()`, `has_pending_request()` and `close()`. Bot keys and grants from
 earlier deployments never become season 2 authority. A V4 key file is refused with
@@ -122,22 +124,52 @@ never Python binary floats.
 the public grant and `next_nonce`. `run({"nonce": snapshot["next_nonce"], "expiresAtMs": ...,
 "action": ...})` signs one request locally with one Ed25519 signature over its exact native bytes.
 Those bytes, the order id and the request digest match the shared TS2 JS and Rust vectors.
+`submit(action, lifetime_ms=...)` is `run` with one signed context read: it takes the nonce from
+that read and an expiry `lifetime_ms` ahead (23 hours at most), never past the key's expiry.
 
 - `place` keeps its order shape: `symbol`, `side`, `order_type`, `time_in_force`, `price`,
   `quantity`, `reduce_only` and `post_only`. Price and quantity must be whole ticks and lots of the
   public market (`tick_size` and `step_size`, read once from `/api/v1/info` `native_market` for
   the pinned config hash). Off-grid input raises `invalid_order` before signing and is never
-  rounded. A `MARKET` order (`IOC` or `FOK`) signs a protection bound, its price rounded away from
-  the book, or 0.5% beyond the best opposite price when `price` is `None`. `expiresAtMs` is the
-  order's lifetime: up to 23 hours for `GTC` and about 30 seconds for one-shot orders, never past
-  the key's expiry. Every order carries the account's fee mode and a fresh random client nonce.
+  rounded. `LIMIT` takes `GTC`, `IOC` or `FOK`. A `MARKET` order (`IOC` or `FOK`) signs a
+  protection bound, its price rounded away from the book, or with `price` `None` a bound
+  `max_slippage_bps` (an int from 1 to 1000, default 50, the browser's 0.5%) beyond the best
+  opposite price, or beyond the mark when that side is empty. `expiresAtMs` is the order's
+  lifetime: up to 23 hours for `GTC` and about 30 seconds for one-shot orders, never past the
+  key's expiry. Every order carries the account's fee mode and a fresh random client nonce.
 - `cancel` takes the 0x `order_id` from the order's ACK (`result["ack"]["order_id"]`).
 - `kill_all` cancels every resting and FairLag-held order of the account at once.
 - `fee_mode`, `leverage` (`"1"` to `"100"`) and `dead_man_switch` are account commands with one
   strictly increasing command nonce per account and key. `next_nonce` is that nonce and never
-  falls below one this key already signed. The operator can keep fee mode and leverage closed.
-  Then they raise `admission_closed` before anything is signed.
+  falls below one this key already signed. The fee mode changes only with no position and no
+  working orders. Leverage can rise at any time and fall only with no position and no working
+  orders. The operator can keep fee mode and leverage closed. Then they raise `admission_closed`
+  before anything is signed.
 - `modify` raises `unsupported`. Cancel the order and place a new one.
+
+While the signed context shows admission closed, `run` and `submit` sign only cancels, kill-all
+and, while the mark catches up (`mark_lagging`), reduce-only orders. Anything else raises
+`admission_closed` before anything is signed. `last_context()["admission"]["reasons"]` says why,
+for example `funding_owed` (only cancels work until a funding payment is applied).
+
+## Reading the account
+
+`await client.account()` is the bot-signed account read on `/v1/ts2/agent/read`. It signs
+`FV_TS2_READ_SIG\0 || config_hash || 1 || u64be account || 32 zero bytes || u64be expiry` with a
+30 second expiry (the server accepts at most 60), uses no nonce and places no order. It returns
+`{"context", "view"}`: the signed context (fee mode, leverage, admission, or `None` with
+`with_context=False`) and the strict view, parsed with exact decimal strings:
+
+- `account`: wallet balance, reserved order margin, locked position margin, realized PnL,
+  funding paid, position quantity and entry price (`None` before the account is funded).
+- `orders` and `fills`: the latest 64 each, prices and sizes converted from ticks and lots,
+  each fill with its settlement state (`operator_soft`, `operator_sealed`, `not_settled` or
+  `controller_observed_settled` and `_final` with the settle transaction).
+- `market`: tick, step, FairLag, the 20-level book and the mark. FairLag-held orders show only
+  their id and `pending` status, never side, price or size.
+
+It works while an original is pending. It is soft, operator-trusted state, never proof or
+finality.
 
 A successful `run()` returns the operator journal's ACK (`fairvenue-ts2-agent-ack-v1`, bound to
 the request digest and, for an order, to its own order id) and the exact-original lookup that
@@ -162,7 +194,10 @@ and past its own expiry, wire reason `expired_never_admitted`) or `not_settled` 
 voided, it never takes effect). The result's `reason` is the server's fixed `not_placed` reason,
 else `None`. `unresolved` stays retained. Stop and ask the operator to reconcile, never send
 another order, invent a replacement, expire or delete the original. An advanced nonce, increased
-balance, new batch or your own clock is not evidence. Only the server's answer is.
+balance, new batch or your own clock is not evidence. Only the server's answer is. If the original
+never reached the server, the lookup answers `unresolved` until its own expiry has passed, so new
+signing waits that long (30 seconds for one-shot orders and account commands, the order's
+lifetime for `GTC`).
 
 `run()` itself also clears the original when the server answers a definitive `not_placed`
 refusal bound to that exact request (HTTP 409, or 429 for `rate_limited`, refused before any
@@ -180,9 +215,10 @@ independent replay, restart and exit acceptance remain separate release gates.
 The `mcp` extra adds `fairvenue_mcp`, a local stdio MCP server over this client for coding
 agents: `pip install './experimental/native-testnet[mcp]'` provides the `fairvenue-mcp`
 command. It is a kit extension, not imported protocol source. It never changes the protocol
-modules, signs nothing until the user allows trading in a one-click dialog (or
-`FAIRVENUE_TRADING=on`), moves downloaded keys into an owner-private profile without returning
-their seed, and uses `recover_original()` for unknown outcomes. Installation and tools:
+modules, signs no order or account setting until the user allows trading in a one-click dialog
+(or `FAIRVENUE_TRADING=on`), moves downloaded keys into an owner-private profile without
+returning their seed, reads the account with `account()`, signs with `submit()` and uses
+`recover_original()` for unknown outcomes. Installation and tools:
 [docs/MCP.md](../../docs/MCP.md).
 
 ## Offline checks and source parity

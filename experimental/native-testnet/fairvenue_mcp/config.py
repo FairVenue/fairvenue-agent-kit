@@ -31,6 +31,9 @@ DEFAULT_DOWNLOAD_DIRS = ("~/Downloads",)
 DEFAULT_MAX_ORDER_QUANTITY = Decimal("0.01")
 DEFAULT_MAX_ORDER_NOTIONAL = Decimal("1000")
 DEFAULT_MAX_PRICE_DEVIATION_BPS = Decimal("500")
+#: Browser parity: a resting (GTC) order lives 23 hours. The server allows 24.
+DEFAULT_GTC_LIFETIME_MINUTES = 23 * 60
+MAX_GTC_LIFETIME_MINUTES = 23 * 60
 
 _ON = {"1", "true", "yes", "on", "enabled"}
 _OFF = {"0", "false", "no", "off", "disabled"}
@@ -63,6 +66,8 @@ class Config:
     download_dirs: tuple[Path, ...]
     #: Whether connect_account may open the key page in the desktop browser.
     open_browser: bool = True
+    #: How long a GTC order rests unless cancelled or filled.
+    gtc_lifetime_ms: int = DEFAULT_GTC_LIFETIME_MINUTES * 60_000
 
     @property
     def keys_dir(self) -> Path:
@@ -98,6 +103,15 @@ def _positive(environ: Mapping[str, str], name: str, default: Decimal) -> Decima
     if not value.is_finite() or value <= 0:
         raise ConfigError(f"{name} must be a positive decimal, for example {default}")
     return value
+
+
+def _minutes(environ: Mapping[str, str], name: str, default: int, maximum: int) -> int:
+    raw = environ.get(name, "").strip()
+    if not raw:
+        return default
+    if not raw.isdigit() or not 1 <= int(raw) <= maximum:
+        raise ConfigError(f"{name} must be a whole number of minutes from 1 to {maximum}")
+    return int(raw)
 
 
 def load_config(environ: Mapping[str, str] | None = None) -> Config:
@@ -141,4 +155,11 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
             if item.strip()
         ),
         open_browser=browser not in _OFF,
+        gtc_lifetime_ms=_minutes(
+            env,
+            "FAIRVENUE_GTC_LIFETIME_MINUTES",
+            DEFAULT_GTC_LIFETIME_MINUTES,
+            MAX_GTC_LIFETIME_MINUTES,
+        )
+        * 60_000,
     )

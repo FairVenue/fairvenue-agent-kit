@@ -2,7 +2,8 @@
 
 This page is the **legacy V0 virtual-settlement** flow. For an independently approved native
 TS2 TESTNET deployment and `fairvenue-ts2-testnet-agent-v1` file, use
-[the native setup](native-testnet.md), not these SDK/credential commands. Never infer the mode
+[the native setup](native-testnet.md) or the [MCP tools](mcp.md), not these SDK/credential
+commands. The hosted `app.fairvenue.xyz` Arena runs the native TESTNET. Never infer the mode
 from the hostname, copy a V0 key into native custody, or fall back when native setup fails.
 
 ## SDK and access

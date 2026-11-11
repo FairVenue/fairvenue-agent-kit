@@ -195,6 +195,30 @@ class ActionShapeTests(unittest.TestCase):
         self.assertEqual(ts2.protection_ticks("60000.3", "0.1", "SELL"), "597002")
         self.assertEqual(ts2.units("59000.07", "0.1", "down"), "590000")
         self.assertEqual(ts2.units("59000.01", "0.1", "up"), "590001")
+        # A chosen width: 2% here. The default stays the browser's 0.5%.
+        self.assertEqual(ts2.protection_ticks("60000", "0.1", "BUY", 200), "612000")
+        self.assertEqual(ts2.protection_ticks("60000.3", "0.1", "SELL", 200), "588002")
+        for bps in (0, 1001, "50", 50.0, True):
+            with self.subTest(bps=bps), self.assertRaises(AgentError) as caught:
+                ts2.protection_ticks("60000", "0.1", "BUY", bps)
+            self.assertEqual(caught.exception.code, "invalid_order")
+
+    def test_exact_decimal_conversions_of_ticks_lots_and_micros(self):
+        self.assertEqual(ts2.times("799900", "0.1"), "79990")
+        self.assertEqual(ts2.times("3", "0.001"), "0.003")
+        self.assertEqual(ts2.times("0", "0.001"), "0")
+        self.assertEqual(ts2.micros("80000050000"), "80000.05")
+        self.assertEqual(ts2.micros("1"), "0.000001")
+
+    def test_account_read_signs_the_native_kind_1_message(self):
+        account = "0x" + "00" * 31 + "07"
+        message = ts2.read_signing_message(PINS, account, "1700000000000")
+        self.assertEqual(message, b"FV_TS2_READ_SIG\0" + bytes.fromhex(PINS["config_hash"][2:])
+                         + b"\x01" + (7).to_bytes(8, "big") + bytes(32)
+                         + (1700000000000).to_bytes(8, "big"))
+        for expires in ("0", "", 1700000000000):
+            with self.subTest(expires=expires), self.assertRaises(AgentError):
+                ts2.read_signing_message(PINS, account, expires)
 
     def test_grant_material_shape_rights_and_lifetime(self):
         material = {"schema": ts2.MATERIAL_SCHEMA, **ts2.PINS, "owner": "0x" + "70" * 20,

@@ -46,11 +46,12 @@ $1,005 in total, paid in crypto. The hackathon runs only with 50+ participants.
   terminal key.
 - The testnet now runs TS2 season 2. Bot keys from season 1 or the older V4 testnet no longer
   sign. Every participant creates a new key with **Create API key & download JSON** and updates
-  the MCP server or the native SDK to version 0.3.1 or later. Tool names, arguments and the SDK
-  calls stay the same.
+  the MCP server or the native SDK to version 0.4.0 or later.
 - Pick one trading prize to target. Maker and taker volume both need PnL above zero and a Sharpe
   ratio above 1 on the day, so size risk for steady hourly returns rather than one large bet.
-- Plan to cover every UTC hour of each scoring day, which usually means a standalone bot rather
-  than a chat session.
+- Plan to cover every UTC hour of each scoring day. That means a standalone bot with the native
+  SDK and its own key, not a chat session. The MCP tools are the fastest way to explore the
+  market, test order shapes and build that bot (`get_guide("bot")`, the `build_bot` prompt).
+- Track PnL, fills and the position with `get_account` (or `client.account()` in a bot).
 - Use the testnet before November 16 to test the bot. Trading before the scoring days also
   breaks ties.
