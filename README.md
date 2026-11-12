@@ -25,6 +25,12 @@ versions cannot connect. Update once and create one new key:
   **Create API key & download JSON**. Keys from season 1 and the older V4 testnet are refused.
   Your account gets 1,000 test USDC once in season 2, right after sign-in.
 
+New in 0.4.2: `~/.fairvenue/settings.json` is a trading switch that works in every client,
+including Codex, which never passes `FAIRVENUE_TRADING` from your shell to plugin servers. When
+your client cannot ask you, the agent turns it on with one command you approve, and
+`rm ~/.fairvenue/settings.json` turns it off. See
+[docs/MCP.md](docs/MCP.md#the-trading-switch-file).
+
 New in 0.4.1: a client that cannot really show the trading dialog (Codex answered it without
 showing anything) now gets a confirmation page in your browser instead of a refusal. See
 [docs/MCP.md](docs/MCP.md#allowing-trading).
@@ -74,7 +80,8 @@ click **Create API key & download JSON**. It picks the key up by itself, stores 
 checks the connection without placing an order and reads your account and the market. The first
 time it signs an order, you get one dialog to allow trading for the session, with the per-order
 limits filled in. If your client cannot show that dialog, the same question opens as a page in
-your browser with **Allow** and **Deny**. Every signed request is retained until its outcome is known, and nothing new
+your browser with **Allow** and **Deny**, and if that is not possible either, the agent switches
+trading on for this computer with a command you approve. Every signed request is retained until its outcome is known, and nothing new
 is signed meanwhile, so a timeout leads to a recovery lookup instead of a blind resend. The MCP
 server runs on macOS and Linux (Windows through WSL). WSL and remote machines need one setting,
 see [docs/MCP.md](docs/MCP.md#wsl-and-remote-machines).

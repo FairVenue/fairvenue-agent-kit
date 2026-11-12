@@ -1,7 +1,7 @@
 {
   "name": "fairvenue",
   "displayName": "FairVenue Agent Kit",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Skill and MCP server for building, testing and running trading agents on the FairVenue native TESTNET (Arbitrum Sepolia mock tokens, no real funds).",
   "author": {
     "name": "FairVenue",

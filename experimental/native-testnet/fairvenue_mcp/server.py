@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 from . import __version__, guide
 from .config import ConfigError, Limits, load_config
 from .profile import SetupError
-from .trading import TRADING_DECLINED, TRADING_FORCED_OFF, ToolProblem, Trader
+from .trading import TRADING_DECLINED, TRADING_FORCED_OFF, TRADING_PAUSED, ToolProblem, Trader
 
 #: A decline or cancel that comes back faster than this, measured from sending the
 #: question, was not a person reading the dialog: some clients advertise form
@@ -180,8 +180,8 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
         state = agent().trading_state()
         if state in ("on", "confirmed"):
             return "allowed"
-        if state == "off":
-            return "off"
+        if state in ("off", "paused"):
+            return state
         capabilities = ctx.client_capabilities
         elicitation = capabilities.elicitation if capabilities is not None else None
         if elicitation is None or (elicitation.form is None and elicitation.url is not None):
@@ -224,6 +224,8 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
             await local(lambda t: t.grant_consent(limits))
         elif answer == "off":
             raise ToolError(TRADING_FORCED_OFF)
+        elif answer == "paused":
+            raise ToolError(TRADING_PAUSED)
         elif answer == "no_dialog":
             await run(lambda t: t.confirm_in_browser())
 
@@ -262,9 +264,12 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
         """Ask the user, in a one-click dialog, to allow trading for this session.
 
         Optional: the first signed action asks by itself. A client that cannot show
-        the dialog gets a confirmation page in the user's browser instead. Returns the
-        limits in force.
+        the dialog gets a confirmation page in the user's browser instead. After
+        disable_trading it resumes trading the user's settings already allow.
+        Returns the limits in force.
         """
+        if agent().trading_state() == "paused":  # Only when the user's switch says on.
+            return await local(lambda t: t.resume_trading())
         await apply_consent(consent)
         return {"status": "allowed", **agent().limits_view()}
 

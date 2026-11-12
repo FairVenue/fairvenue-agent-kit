@@ -28,11 +28,14 @@ the seed.
 - Bot keys from an earlier testnet season (V4 or TS2 season 1) no longer work. They are refused \
 as a key of a previous deployment, or with "TS2: create a new bot key". The user creates a new \
 one on the key page.
-- The first signed action of a session shows the user a one-click dialog to allow trading, \
-with limits. If the client cannot show it, the same question opens as a page in the user's \
-browser and the call waits for the click. If it times out, relay its message and call again \
-once the user approved. Without a browser, the user sets FAIRVENUE_TRADING=on. dry_run=true \
-previews an order without signing. Respect the limits instead of working around them.
+- The first signed action of a session asks the user to allow trading, in a dialog or, when \
+the client cannot show one, on a page in the user's browser. If a call says the client could \
+not ask and the user asked you to trade, run the command it gives, which writes \
+{{"trading":"on"}} to ~/.fairvenue/settings.json, then call again. Tell the user once that \
+trading is now on for this computer and that rm ~/.fairvenue/settings.json undoes it. Never run \
+it for a data-only request, after the user declined, or when trading is switched off. \
+dry_run=true previews an order without signing. Respect the limits instead of working around \
+them.
 - get_account shows balances, margin, the position, open orders and recent fills. Read it \
 before and after trading.
 - Orders: LIMIT (GTC, post-only GTC, IOC or FOK) or MARKET (IOC or FOK). A MARKET order signs \
@@ -98,15 +101,18 @@ profile with mode 0600 and removes the downloaded copy. Nobody sees the key's co
 names the public owner address, which also identifies hackathon winners.
 5. The first signed order asks the user once, in a dialog, to allow trading for the session. \
 They can adjust the per-order limits there. A client that cannot show the dialog gets the same \
-question on a one-shot page in the browser, with Allow and Deny and the default limits. Without \
-a browser on this computer, FAIRVENUE_TRADING=on and the FAIRVENUE_MAX_ORDER_* variables do the \
-same.
+question on a one-shot page in the browser, with Allow and Deny and the default limits. \
+{{"trading": "on"}} in ~/.fairvenue/settings.json (owner-only, mode 0600) allows trading on \
+this computer without asking, from the next call on and in every client. When a client could \
+not ask, the refusal gives the command that writes it. FAIRVENUE_TRADING, when the client \
+passes it, wins over the file.
 
-WSL: the browser saves to Windows, so set FAIRVENUE_DOWNLOAD_DIRS to \
-/mnt/c/Users/<you>/Downloads in the server environment. Remote or SSH machines: set \
-FAIRVENUE_OPEN_BROWSER=0, open the link on your own computer, then copy the downloaded key to \
-the remote machine (for example with scp, into a private folder) and call import_agent_key \
-with its path, or find_agent_key_downloads with that folder.
+WSL: the browser saves to Windows, so call find_agent_key_downloads with \
+/mnt/c/Users/<you>/Downloads, or set FAIRVENUE_DOWNLOAD_DIRS in a client that passes \
+environment variables. Remote or SSH machines: set FAIRVENUE_OPEN_BROWSER=0, open the link on \
+your own computer, then copy the downloaded key to the remote machine (for example with scp, \
+into a private folder) and call import_agent_key with its path, or find_agent_key_downloads \
+with that folder.
 
 Keys from an earlier season do not work. V4 keys (schema fairvenue-native-testnet-agent-v1) are \
 refused with "TS2: create a new bot key". TS2 season 1 keys are refused as keys of a previous \

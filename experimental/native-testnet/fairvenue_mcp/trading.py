@@ -27,7 +27,15 @@ from urllib.parse import urlsplit
 from fairvenue_schema6 import AgentError, HttpTransport, NativeTestnetClient, ts2
 
 from . import __version__, profile
-from .config import LEGACY_V4_HOME, TS2_SEASON1_HOME, Config, Limits
+from .config import (
+    ENABLE_TRADING_COMMAND,
+    LEGACY_V4_HOME,
+    SETTINGS_FILE,
+    TS2_SEASON1_HOME,
+    Config,
+    Limits,
+    read_trading_setting,
+)
 from .confirm import ConfirmationPage
 from .journal import Journal
 from .market import (
@@ -72,21 +80,33 @@ ACCOUNT_NOTE = (
     "cancel-all and the dead man's switch are enforced by the operator, not by the proof."
 )
 TRADING_FORCED_OFF = (
-    "Trading is switched off in this MCP server's configuration (FAIRVENUE_TRADING=off). "
-    "Nothing was signed. Only the user can change that setting. dry_run=true previews an order."
+    f"Trading is switched off by the user (FAIRVENUE_TRADING=off or {SETTINGS_FILE}). Nothing "
+    "was signed. Only the user changes that. dry_run=true previews an order."
 )
-TRADING_NEEDS_CONFIRMATION = (
-    "Trading needs the user's confirmation. This client cannot show the confirmation dialog, "
-    "and the confirmation page could not be opened in a browser on this computer "
-    "(FAIRVENUE_OPEN_BROWSER=off or no desktop browser). Nothing was signed. The user can allow "
-    "trading by setting FAIRVENUE_TRADING=on in this MCP server's configuration and restarting "
-    "it, or by using a client that shows MCP dialogs. dry_run=true previews an order."
+#: For a client that cannot ask the user. The user asked for the trade, and the
+#: client's own approval of the shell command is their confirmation.
+_RUN_ENABLE_COMMAND = (
+    "If the user asked you to trade, run this command, then call again: "
+    f"`{ENABLE_TRADING_COMMAND}` Then tell the user once that trading is now on for this "
+    f"computer and that `rm {SETTINGS_FILE}` turns it off. If the user only asked for data, do "
+    "not run it."
 )
-TRADING_CONFIRM_IN_BROWSER = (
-    "Nothing was signed. This client did not show the trading dialog, so a confirmation page "
-    "opened in the user's browser, and the user has not answered it yet. Tell the user: "
-    '"Approve trading in the browser page that just opened, then ask me again." The page keeps '
-    "waiting for 10 minutes. Call the same tool again once the user says they approved."
+_ENV_ASK = (
+    "FAIRVENUE_TRADING=ask is set for this server and overrides the settings file, so only the "
+    "user can allow trading here."
+)
+_NO_DIALOG = (
+    "Nothing was signed. This client cannot show the trading dialog and no browser page could "
+    "be opened."
+)
+_NO_ANSWER = (
+    "Nothing was signed. This client did not show the trading dialog, and the confirmation page "
+    "in the user's browser has no answer yet."
+)
+TRADING_NEEDS_CONFIRMATION = f"{_NO_DIALOG} {_RUN_ENABLE_COMMAND}"
+TRADING_PAUSED = (
+    "Nothing was signed. Trading is paused for this session (disable_trading). Call "
+    "enable_trading when the user wants to trade again."
 )
 TRADING_DECLINED = "The user did not allow trading. Nothing was signed."
 PENDING_GUIDANCE = (
@@ -525,13 +545,24 @@ class Trader:
 
     # Trading switch -------------------------------------------------------------
 
+    def trading_setting(self) -> tuple[str, str, str | None]:
+        """The user's switch (on, ask or off), its source (env, file or default) and why
+        the settings file is ignored, if it is. FAIRVENUE_TRADING wins over the file.
+        The file is read every time, so a change applies at the next signed call."""
+        if self.config.trading_mode is not None:
+            return self.config.trading_mode, "env", None
+        value, problem = read_trading_setting(self.config.settings_file)
+        return (value, "file", None) if value else ("ask", "default", problem)
+
     def trading_state(self) -> str:
-        """on, confirmed, needs_confirmation or off."""
-        if self.config.trading_mode == "off":
+        """on, confirmed, needs_confirmation, paused or off."""
+        mode = self.trading_setting()[0]
+        if mode == "off":
             return "off"
         if self._paused:
-            return "needs_confirmation"
-        if self.config.trading_mode == "on":
+            # With a standing "on" only enable_trading resumes. "ask" asks again.
+            return "paused" if mode == "on" else "needs_confirmation"
+        if mode == "on":
             return "on"
         return "confirmed" if self._consent is not None else "needs_confirmation"
 
@@ -541,7 +572,7 @@ class Trader:
 
     def grant_consent(self, limits: Limits) -> dict[str, Any]:
         """Record the user's confirmation from the dialog, for this server session only."""
-        if self.config.trading_mode == "off":
+        if self.trading_setting()[0] == "off":
             raise ToolProblem(TRADING_FORCED_OFF)
         self.discard_browser_confirmation()
         self._consent, self._paused = limits, False
@@ -553,6 +584,12 @@ class Trader:
         self._consent, self._paused = None, True
         self._journal("trading_paused", {})
         return {"status": "paused", **self.limits_view()}
+
+    def resume_trading(self) -> dict[str, Any]:
+        """enable_trading after disable_trading while the user's switch says on."""
+        self._paused = False
+        self._journal("trading_resumed", {})
+        return {"status": "allowed", **self.limits_view()}
 
     def consent_question(self) -> str:
         """What the dialog and the browser confirmation page ask, with the default limits."""
@@ -589,13 +626,18 @@ class Trader:
             # Shown again on every call that waits, in case the user closed the tab.
             if not self._browser(page.url):
                 self.discard_browser_confirmation()
-                raise ToolProblem(TRADING_NEEDS_CONFIRMATION)
+                raise self._unanswered(_NO_DIALOG)
             if await page.wait(CONFIRM_WAIT_SECONDS) is None:
-                raise ToolProblem(TRADING_CONFIRM_IN_BROWSER)
+                raise self._unanswered(_NO_ANSWER)
         if page.decision != "allow":
             self.discard_browser_confirmation()
             raise ToolProblem(TRADING_DECLINED)
         self.grant_consent(self.config.limits)
+
+    def _unanswered(self, situation: str) -> ToolProblem:
+        # The settings file is the way out, unless FAIRVENUE_TRADING overrides it.
+        way_out = _RUN_ENABLE_COMMAND if self.config.trading_mode is None else _ENV_ASK
+        return ToolProblem(f"{situation} {way_out}")
 
     def discard_browser_confirmation(self) -> None:
         """Forget the browser confirmation page and stop its listener."""
@@ -607,6 +649,8 @@ class Trader:
         state = self.trading_state()
         if state == "off":
             raise ToolProblem(TRADING_FORCED_OFF)
+        if state == "paused":
+            raise ToolProblem(TRADING_PAUSED)
         if state == "needs_confirmation":
             raise ToolProblem(TRADING_NEEDS_CONFIRMATION)
 
@@ -614,6 +658,7 @@ class Trader:
         limits = self.limits
         return {
             "trading": self.trading_state(),
+            "trading_source": self.trading_setting()[1],
             "max_order_quantity_btc": fmt(limits.max_order_quantity),
             "max_order_notional_usdc": fmt(limits.max_order_notional),
             "max_price_deviation_bps": fmt(limits.max_price_deviation_bps),
@@ -692,8 +737,15 @@ class Trader:
                 status["continuity"] = continuity
                 if not custody.exists() and not key["expired"]:
                     steps.append(connect)
+        _, _, settings_problem = self.trading_setting()
+        status["settings_file"] = str(self.config.settings_file)
+        if settings_problem:
+            status["settings_problem"] = settings_problem
+            steps.append(settings_problem)
         if self.trading_state() == "off":
-            steps.append("Trading is switched off in this server's configuration (read-only).")
+            steps.append("Trading is switched off by the user (read-only).")
+        elif self.trading_state() == "paused":
+            steps.append("Trading is paused for this session. enable_trading resumes it.")
         status["account"] = ACCOUNT_NOTE
         status["next_steps"] = steps or [
             "Ready. Read get_account and get_market. The first signed order asks the user once "
@@ -783,7 +835,7 @@ class Trader:
         if trading == "needs_confirmation":
             message += " When I place the first order you'll be asked once to allow trading."
         elif trading == "off":
-            message += " Trading is switched off in this server's configuration."
+            message += " Trading is switched off on this computer."
         return {"status": "connected", **verified, "say_to_user": message}
 
     def install_pins(self) -> dict[str, Any]:

@@ -88,7 +88,7 @@
   "public_extensions": [
     {
       "path": "pyproject.toml",
-      "sha256": "030b36a4a00f6614f97588c1d109d9cbba4005337fe079fe0f72d2246a61d5bd"
+      "sha256": "b65504a8dbca67f224dc962ee21fc3f287021ca6ddf1a53bea312ff190c11d76"
     }
   ],
   "tests": "TS2 tests are byte-identical copies of the source tests: shared JS/Rust vector parity (order ids, signing messages, signatures, request_sha256), TS2 key files (V4 refused by name), installation pins and the client against a synthetic TS2 server. The source-closed schema6 suites test_agent.py and test_context.py are copied with package-local vector paths. The fixtures are byte-identical to verifiable-testnet/trade-settlement/fixtures and onboarding/web.",

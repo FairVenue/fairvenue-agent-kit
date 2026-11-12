@@ -1,14 +1,19 @@
 """Environment configuration for the FairVenue MCP server.
 
-Read once at startup. Nothing here touches the network or the filesystem;
-directories are created later, only by an explicit setup tool call.
+Read once at startup. Nothing here touches the network or writes the filesystem;
+directories are created later, only by an explicit setup tool call. The one
+exception is the user's trading switch in ``~/.fairvenue/settings.json``, which
+``read_trading_setting`` reads at every signed call.
 """
 
 from __future__ import annotations
 
+import errno
+import json
 import os
+import stat
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -37,7 +42,18 @@ MAX_GTC_LIFETIME_MINUTES = 23 * 60
 
 _ON = {"1", "true", "yes", "on", "enabled"}
 _OFF = {"0", "false", "no", "off", "disabled"}
-_ASK = {"", "ask"}
+
+#: The trading switch that works in every client. Clients pass HOME to the server,
+#: but not always other variables (Codex passes plugin servers a short fixed list).
+#: FAIRVENUE_TRADING, when set, wins over it.
+SETTINGS_FILE = "~/.fairvenue/settings.json"
+#: The command that turns trading on for this computer. ``rm`` of the file undoes it.
+ENABLE_TRADING_COMMAND = (
+    'mkdir -p ~/.fairvenue && printf \'{"trading":"on"}\\n\' > ~/.fairvenue/settings.json '
+    "&& chmod 600 ~/.fairvenue/settings.json"
+)
+TRADING_SETTINGS = ("on", "ask", "off")
+_SETTINGS_MAX_BYTES = 4096
 
 
 class ConfigError(ValueError):
@@ -59,10 +75,11 @@ class Config:
     installation_file: Path
     installation_sha256: str
     key_file: Path | None
-    #: "ask" (default): the user confirms trading once per server session in a dialog,
-    #: or on a browser page when the client cannot show it.
+    #: FAIRVENUE_TRADING, or None when it is not set and the settings file decides.
+    #: "ask" (the default): the user confirms trading once per server session in a
+    #: dialog, or on a browser page when the client cannot show it.
     #: "on": trading is allowed from the start. "off": never, whatever the user clicks.
-    trading_mode: str
+    trading_mode: str | None
     limits: Limits
     download_dirs: tuple[Path, ...]
     #: Whether connect_account may open the key page, and the trading confirmation its
@@ -70,6 +87,8 @@ class Config:
     open_browser: bool = True
     #: How long a GTC order rests unless cancelled or filled.
     gtc_lifetime_ms: int = DEFAULT_GTC_LIFETIME_MINUTES * 60_000
+    #: The user's trading switch, read at every signed call.
+    settings_file: Path = field(default_factory=lambda: Path.home() / ".fairvenue/settings.json")
 
     @property
     def keys_dir(self) -> Path:
@@ -128,7 +147,7 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
         raise ConfigError("FAIRVENUE_INSTALLATION_SHA256 must be 64 lowercase hex characters")
     key = env.get("FAIRVENUE_KEY_FILE", "").strip()
     trading = env.get("FAIRVENUE_TRADING", "").strip().lower()
-    if trading not in _ON | _OFF | _ASK:
+    if trading not in _ON | _OFF | {"", "ask"}:
         raise ConfigError("FAIRVENUE_TRADING must be ask, on or off")
     downloads = env.get("FAIRVENUE_DOWNLOAD_DIRS", "").strip()
     browser = env.get("FAIRVENUE_OPEN_BROWSER", "").strip().lower()
@@ -139,7 +158,7 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
         installation_file=_path(installation) if installation else home / "installation.json",
         installation_sha256=sha256,
         key_file=_path(key) if key else None,
-        trading_mode="on" if trading in _ON else "off" if trading in _OFF else "ask",
+        trading_mode="on" if trading in _ON else "off" if trading in _OFF else trading or None,
         limits=Limits(
             max_order_quantity=_positive(
                 env, "FAIRVENUE_MAX_ORDER_QUANTITY", DEFAULT_MAX_ORDER_QUANTITY
@@ -165,3 +184,44 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
         )
         * 60_000,
     )
+
+
+def read_trading_setting(path: Path) -> tuple[str | None, str | None]:
+    """The "trading" value of the user's settings file.
+
+    Returns (value, None), (None, None) when there is no file, or (None, problem)
+    when the file is ignored. Only a regular file that the current user owns and
+    nobody else can write counts, so a broken or planted file never allows trading.
+    The problem names the file, never its contents.
+    """
+    try:
+        # O_NONBLOCK: a FIFO in its place must not hang the server.
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None, None
+    except OSError as error:
+        reason = "is a symlink" if error.errno == errno.ELOOP else "is unreadable"
+        return None, _ignored(path, reason)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            return None, _ignored(path, "is not a regular file")
+        if info.st_uid != os.getuid():
+            return None, _ignored(path, "belongs to another user")
+        if info.st_mode & 0o022:
+            return None, _ignored(path, "is writable by other users. Run chmod 600 on it")
+        data = os.read(fd, _SETTINGS_MAX_BYTES + 1)
+    finally:
+        os.close(fd)
+    try:
+        document = json.loads(data) if len(data) <= _SETTINGS_MAX_BYTES else None
+    except (ValueError, RecursionError):
+        return None, _ignored(path, "is not valid JSON")
+    value = document.get("trading") if isinstance(document, dict) else None
+    if value not in TRADING_SETTINGS:
+        return None, _ignored(path, 'does not hold {"trading": "on"}, "ask" or "off"')
+    return value, None
+
+
+def _ignored(path: Path, reason: str) -> str:
+    return f"{path} is ignored because it {reason}. Trading falls back to ask."

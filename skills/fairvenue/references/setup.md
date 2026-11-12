@@ -10,7 +10,8 @@ from the hostname, copy a V0 key into native custody, or fall back when native s
 
 Clone `https://github.com/FairVenue/fairvenue-agent-kit` into an appropriate tools directory, record
 the reviewed commit and install it in the project's Python 3.11+ virtual environment. For example,
-from that checkout: `python -m pip install -e .`. No PyPI release is advertised.
+from that checkout: `python -m pip install -e .`. No PyPI release is advertised, so never install
+a same-named PyPI package. Installing the skill does not install the SDK.
 
 For access, give the user the key setup page of the operator-provided V0 Arena origin
 (`<origin>/?setup=api-key`) and ask them to click **Create & download API key**. Older deployments
@@ -18,7 +19,8 @@ keep **System → Create API key → Download JSON**. The hosted `app.fairvenue.
 the native TESTNET. Its key page creates native TESTNET bot keys, which this V0 SDK cannot use.
 The user signs in first if necessary. The browser generates the key. The server receives only
 its public half. Move the file outside source control to an owner-only location (`0600` on
-Linux/macOS). No private key belongs in the conversation.
+Linux/macOS), never over an existing credential. No private key belongs in the conversation.
+Public-read development can continue while the user creates the key.
 
 For an already running isolated local backend only, explicit account-creation authorization
 permits `fairvenue init-local --base-url http://127.0.0.1:8088 --credentials .fairvenue/testnet.json`.

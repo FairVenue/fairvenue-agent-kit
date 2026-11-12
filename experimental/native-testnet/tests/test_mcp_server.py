@@ -16,6 +16,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -28,7 +29,13 @@ from urllib.parse import urlencode, urlsplit
 
 from fairvenue_mcp import profile as profile_module
 from fairvenue_mcp import trading as trading_module
-from fairvenue_mcp.config import ConfigError, Limits, load_config
+from fairvenue_mcp.config import (
+    ENABLE_TRADING_COMMAND,
+    ConfigError,
+    Limits,
+    load_config,
+    read_trading_setting,
+)
 from fairvenue_mcp.confirm import ConfirmationPage
 from fairvenue_mcp.journal import Journal
 from fairvenue_mcp.market import MarketDataError, parse_market
@@ -79,7 +86,7 @@ class FakePublic:
 class Profile:
     """A private FAIRVENUE_HOME with synthetic pins and one downloaded key."""
 
-    def __init__(self, fixture: NativeFixture, *, trading: str = "on") -> None:
+    def __init__(self, fixture: NativeFixture, *, trading: str | None = "on") -> None:
         self.fixture = fixture
         self.opened: list[str] = []  # URLs the server asked the browser to open.
         self.root = Path(tempfile.mkdtemp(prefix="fairvenue-mcp-")).resolve()
@@ -93,14 +100,22 @@ class Profile:
         self.pins.chmod(0o600)
         self.download = self.write_key()
         self.public = FakePublic(fixture)
-        self.config = load_config(
-            {
-                "FAIRVENUE_HOME": str(self.home),
-                "FAIRVENUE_INSTALLATION_SHA256": hashlib.sha256(data).hexdigest(),
-                "FAIRVENUE_TRADING": trading,
-                "FAIRVENUE_DOWNLOAD_DIRS": str(self.downloads),
-            }
-        )
+        environ = {
+            "FAIRVENUE_HOME": str(self.home),
+            "FAIRVENUE_INSTALLATION_SHA256": hashlib.sha256(data).hexdigest(),
+            "FAIRVENUE_DOWNLOAD_DIRS": str(self.downloads),
+        }
+        if trading is not None:  # None: FAIRVENUE_TRADING unset, the settings file decides.
+            environ["FAIRVENUE_TRADING"] = trading
+        # Never the real ~/.fairvenue/settings.json.
+        self.settings = self.root / "user" / ".fairvenue" / "settings.json"
+        self.config = dataclasses.replace(load_config(environ), settings_file=self.settings)
+
+    def set_trading(self, text: str, mode: int = 0o600) -> None:
+        """Write the user's settings file with exactly this text."""
+        self.settings.parent.mkdir(parents=True, exist_ok=True)
+        self.settings.write_text(text)
+        self.settings.chmod(mode)
 
     def write_key(self, name: str = "fairvenue-TESTNET-agent.json", **changes: Any) -> Path:
         path = self.downloads / name
@@ -108,7 +123,7 @@ class Profile:
         path.chmod(0o644)  # Browsers save downloads world-readable; import fixes the copy.
         return path
 
-    def trader(self, browser: Any = None, **overrides: Any) -> Trader:
+    def trader(self, browser: Any = None, config: Any = None, **overrides: Any) -> Trader:
         fixture = self.fixture
 
         def no_browser(url: str) -> bool:
@@ -135,7 +150,7 @@ class Profile:
                 initialize=initialize,
             )
 
-        config = self.config
+        config = config or self.config
         if overrides:
             config = type(config)(**{**config.__dict__, **overrides})
         return Trader(
@@ -292,7 +307,7 @@ class McpTraderTests(unittest.IsolatedAsyncioTestCase):
         # In ask mode nothing is signed until the user confirms in the dialog.
         asking = self.profile.trader(trading_mode="ask")
         self.addCleanup(asking.close)
-        with self.assertRaisesRegex(ToolProblem, "cannot show the confirmation dialog"):
+        with self.assertRaisesRegex(ToolProblem, "cannot show the trading dialog"):
             await asking.cancel(order_id=ORDER_ID)
         preview = await trader.place(
             dry_run=True,
@@ -837,7 +852,7 @@ class McpProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.fixture = NativeFixture()
         self.order = {"side": "BUY", "quantity": "0.001", "price": "79990"}
 
-    def trader(self, trading: str) -> Trader:
+    def trader(self, trading: str | None) -> Trader:
         profile = Profile(self.fixture, trading=trading)
         self.addCleanup(profile.cleanup)
         trader = profile.trader()
@@ -993,7 +1008,7 @@ class McpProtocolTests(unittest.IsolatedAsyncioTestCase):
 
         from fairvenue_mcp.server import create_server
 
-        trader = self.trader("ask")
+        trader = self.trader(None)  # No FAIRVENUE_TRADING and no settings file: ask.
         trader.import_key(str(trader.config.download_dirs[0] / "fairvenue-TESTNET-agent.json"))
 
         asked: list[str] = []
@@ -1016,12 +1031,16 @@ class McpProtocolTests(unittest.IsolatedAsyncioTestCase):
             # page, and this test browser cannot be opened.
             declined = await client.call_tool("place_order", self.order)
             self.assertTrue(declined.is_error)
-            self.assertIn("cannot show the confirmation dialog", declined.content[0].text)
+            self.assertIn("cannot show the trading dialog", declined.content[0].text)
+            self.assertIn(ENABLE_TRADING_COMMAND, declined.content[0].text)
             self.assertNotIn("127.0.0.1", declined.content[0].text)
         async with asyncio.timeout(60), Client(create_server(trader)) as client:
             unsupported = await client.call_tool("cancel_all_orders", {})
             self.assertTrue(unsupported.is_error)
-            self.assertIn("FAIRVENUE_TRADING=on", unsupported.content[0].text)
+            self.assertIn(ENABLE_TRADING_COMMAND, unsupported.content[0].text)
+            self.assertIn(
+                "If the user only asked for data, do not run it", unsupported.content[0].text
+            )
         self.assertEqual(self.fixture.calls["admit"], 0)
         self.assertEqual(trader.trading_state(), "needs_confirmation")
 
@@ -1085,8 +1104,8 @@ class McpBrowserConfirmationTests(unittest.IsolatedAsyncioTestCase):
             threading.Timer(0.3, click, (url, self.answer)).start()
         return True
 
-    def trader(self, trading: str = "ask") -> Trader:
-        profile = Profile(self.fixture, trading=trading)
+    def trader(self, trading: str | None = None) -> Trader:
+        profile = Profile(self.fixture, trading=trading)  # None: the default "ask".
         self.addCleanup(profile.cleanup)
         trader = profile.trader(browser=self.browser)
         self.addCleanup(trader.close)
@@ -1200,8 +1219,9 @@ class McpBrowserConfirmationTests(unittest.IsolatedAsyncioTestCase):
                 waiting = await client.call_tool("close_position", {})
                 self.assertTrue(waiting.is_error)
                 text = waiting.content[0].text
+                self.assertIn("confirmation page in the user's browser has no answer yet", text)
                 self.assertIn(
-                    "Approve trading in the browser page that just opened, then ask me again", text
+                    f"run this command, then call again: `{ENABLE_TRADING_COMMAND}`", text
                 )
                 self.assertNotIn("127.0.0.1", text)
                 # Asked again before any click: the same page is shown again.
@@ -1241,14 +1261,21 @@ class McpBrowserConfirmationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.fixture.calls["admit"], 0)
 
     async def test_without_a_browser_the_page_url_is_never_shown(self) -> None:
-        profile = Profile(self.fixture, trading="ask")
+        profile = Profile(self.fixture, trading=None)
         self.addCleanup(profile.cleanup)
         trader = Trader(dataclasses.replace(profile.config, open_browser=False))
         self.addCleanup(trader.close)
-        with self.assertRaisesRegex(ToolProblem, "FAIRVENUE_TRADING=on") as caught:
+        with self.assertRaises(ToolProblem) as caught:
             await trader.confirm_in_browser()
+        self.assertIn(ENABLE_TRADING_COMMAND, str(caught.exception))
         self.assertNotIn("http", str(caught.exception))
         self.assertIsNone(trader._confirmation)  # No listener is left behind.
+        # FAIRVENUE_TRADING=ask overrides the file, so the command would not help.
+        asking = Trader(dataclasses.replace(profile.config, open_browser=False, trading_mode="ask"))
+        self.addCleanup(asking.close)
+        with self.assertRaisesRegex(ToolProblem, "FAIRVENUE_TRADING=ask is set") as caught:
+            await asking.confirm_in_browser()
+        self.assertNotIn(ENABLE_TRADING_COMMAND, str(caught.exception))
 
     async def test_only_the_page_itself_can_answer(self) -> None:
         page = ConfirmationPage("Allow <this> agent? At most 0.01 BTC.", lifetime=30)
@@ -1283,15 +1310,200 @@ class McpBrowserConfirmationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(open_in_browser("http://127.0.0.1:80@example.com/"))
 
 
+class McpSettingsFileTests(unittest.IsolatedAsyncioTestCase):
+    """~/.fairvenue/settings.json: the trading switch every client passes to the server."""
+
+    async def asyncSetUp(self) -> None:
+        self.fixture = NativeFixture()
+
+    def profile(self, trading: str | None = None) -> Profile:
+        profile = Profile(self.fixture, trading=trading)
+        self.addCleanup(profile.cleanup)
+        return profile
+
+    def trader(self, profile: Profile, **overrides: Any) -> Trader:
+        trader = profile.trader(**overrides)
+        self.addCleanup(trader.close)
+        trader.import_key(str(profile.download))
+        return trader
+
+    async def test_the_environment_wins_over_the_file(self) -> None:
+        for env, file, state in (("off", "on", "off"), ("ask", "on", "needs_confirmation")):
+            with self.subTest(env=env, file=file):
+                profile = self.profile(env)
+                profile.set_trading(json.dumps({"trading": file}))
+                trader = self.trader(profile)
+                self.assertEqual(trader.trading_state(), state)
+                self.assertEqual(trader.limits_view()["trading_source"], "env")
+        profile = self.profile("on")
+        profile.set_trading('{"trading":"off"}')
+        self.assertEqual(self.trader(profile).trading_state(), "on")
+
+    async def test_the_file_switches_on_off_and_ask_without_a_restart(self) -> None:
+        profile = self.profile()
+        trader = self.trader(profile)
+        await trader.verify()
+        self.assertEqual(trader.trading_state(), "needs_confirmation")
+        self.assertEqual(trader.limits_view()["trading_source"], "default")
+        profile.set_trading('{"trading":"on"}\n')
+        self.assertEqual((trader.trading_state(), trader.trading_setting()[1]), ("on", "file"))
+        placed = await trader.place(dry_run=False, **ORDER)
+        self.assertEqual(placed["status"], "accepted")
+        profile.set_trading('{"trading": "off"}')
+        self.assertEqual(trader.trading_state(), "off")
+        with self.assertRaisesRegex(ToolProblem, "settings.json"):
+            await trader.place(dry_run=False, **ORDER)
+        profile.set_trading('{"trading": "ask"}')
+        self.assertEqual(
+            (trader.trading_state(), trader.trading_setting()[1]), ("needs_confirmation", "file")
+        )
+        profile.settings.unlink()  # rm ~/.fairvenue/settings.json undoes it.
+        self.assertEqual(trader.trading_setting(), ("ask", "default", None))
+        self.assertEqual(self.fixture.calls["admit"], 1)
+
+    async def test_unsafe_or_broken_files_never_allow_trading(self) -> None:
+        marker = "CONTENT-MARKER"  # File contents never appear in warnings.
+        good = json.dumps({"trading": "on", "note": marker})
+        profile = self.profile()
+        trader = self.trader(profile)
+
+        def symlink() -> None:
+            target = profile.root / "elsewhere.json"
+            target.write_text(good)
+            target.chmod(0o600)
+            profile.settings.parent.mkdir(parents=True, exist_ok=True)
+            profile.settings.symlink_to(target)
+
+        def directory() -> None:
+            profile.settings.mkdir(parents=True)
+
+        def fifo() -> None:
+            profile.settings.parent.mkdir(parents=True, exist_ok=True)
+            os.mkfifo(profile.settings, 0o600)
+
+        cases: list[tuple[str, Any, str]] = [
+            ("symlink", symlink, "is a symlink"),
+            ("directory", directory, "is not a regular file"),
+            ("fifo", fifo, "is not a regular file"),
+            ("world-writable", lambda: profile.set_trading(good, 0o666), "writable by other"),
+            ("group-writable", lambda: profile.set_trading(good, 0o620), "writable by other"),
+            ("bad JSON", lambda: profile.set_trading('{"trading": on ' + marker), "not valid JSON"),
+            ("unknown value", lambda: profile.set_trading('{"trading": "yes"}'), "does not hold"),
+            ("not an object", lambda: profile.set_trading('"on"'), "does not hold"),
+            ("too large", lambda: profile.set_trading(good + " " * 5000), "does not hold"),
+        ]
+        for name, make, reason in cases:
+            with self.subTest(name):
+                make()
+                self.assertEqual(trader.trading_state(), "needs_confirmation")
+                status = await trader.setup_status()
+                self.assertEqual(status["trading"]["trading_source"], "default")
+                self.assertIn(str(profile.settings), status["settings_problem"])
+                self.assertIn(reason, status["settings_problem"])
+                self.assertIn(status["settings_problem"], status["next_steps"])
+                self.assertNotIn(marker, json.dumps(status))
+                if profile.settings.is_dir() and not profile.settings.is_symlink():
+                    profile.settings.rmdir()
+                else:
+                    profile.settings.unlink()
+        # Owned by another user: the uid is checked on the open file.
+        profile.set_trading(good)
+        with patch.object(os, "getuid", return_value=os.getuid() + 1):
+            value, problem = read_trading_setting(profile.settings)
+        self.assertIsNone(value)
+        self.assertIn("belongs to another user", str(problem))
+        self.assertEqual(read_trading_setting(profile.settings), ("on", None))
+        self.assertEqual(self.fixture.calls["admit"], 0)
+
+    async def test_the_command_writes_a_file_the_server_accepts(self) -> None:
+        profile = self.profile()
+        home = profile.root / "user"
+        environ = {"HOME": str(home), "PATH": "/usr/bin:/bin"}
+        command = ["/bin/sh", "-c", ENABLE_TRADING_COMMAND]
+        subprocess.run(command, env=environ, check=True)  # noqa: S603 - the fixed command.
+        self.assertEqual(profile.settings, home / ".fairvenue" / "settings.json")
+        self.assertEqual(profile.settings.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(profile.settings.read_text(), '{"trading":"on"}\n')
+        self.assertEqual(read_trading_setting(profile.settings), ("on", None))
+        subprocess.run(command, env=environ, check=True)  # noqa: S603 - running it again is fine.
+        self.assertEqual(read_trading_setting(profile.settings), ("on", None))
+
+    async def test_disable_trading_pauses_until_enable_trading_with_the_file_on(self) -> None:
+        from mcp import Client
+
+        from fairvenue_mcp.server import create_server
+
+        profile = self.profile()
+        profile.set_trading('{"trading":"on"}')
+        trader = self.trader(profile)
+        order = {"side": "BUY", "quantity": "0.001", "price": "79990"}
+        async with asyncio.timeout(60), Client(create_server(trader)) as client:
+            paused = await client.call_tool("disable_trading", {})
+            self.assertEqual(paused.structured_content["trading"], "paused")
+            refused = await client.call_tool("place_order", order)
+            self.assertTrue(refused.is_error)
+            self.assertIn("enable_trading", refused.content[0].text)
+            self.assertNotIn(ENABLE_TRADING_COMMAND, refused.content[0].text)
+            resumed = await client.call_tool("enable_trading", {})
+            self.assertEqual(resumed.structured_content["status"], "allowed")
+            placed = await client.call_tool("place_order", order)
+            self.assertEqual(placed.structured_content["status"], "accepted")
+        self.assertEqual(profile.opened, [])
+        self.assertEqual(self.fixture.calls["admit"], 1)
+
+    async def test_a_codex_like_environment_closes_the_position_through_the_file(self) -> None:
+        from mcp import Client
+
+        from fairvenue_mcp.server import create_server
+
+        profile = self.profile()
+        home = profile.root / "codex-home"
+        home.mkdir(mode=0o700)
+        # What Codex passes a plugin server: no FAIRVENUE_* variable at all.
+        codex = {"HOME": str(home), "PATH": "/usr/bin:/bin", "USER": "tester", "TMPDIR": "/tmp"}
+        with patch.dict(os.environ, codex, clear=True):
+            config = load_config()
+            # The agent ran the command after a refusal, with the client's approval.
+            subprocess.run(["/bin/sh", "-c", ENABLE_TRADING_COMMAND], check=True)  # noqa: S603
+        self.assertIsNone(config.trading_mode)
+        self.assertEqual(config.settings_file, home / ".fairvenue" / "settings.json")
+        self.assertEqual(config.home, home / ".fairvenue" / "ts2-season2")
+        trader = profile.trader(config=config)
+        self.addCleanup(trader.close)
+        trader.install_pins()  # The packaged pins.
+        key = profile.root / "fairvenue-TESTNET-agent.json"
+        key.write_text(json.dumps(self.fixture.export(api_url="https://app.fairvenue.xyz/")))
+        trader.import_key(str(key))
+        asked: list[str] = []
+        dialog = answers("decline", asked=asked)
+        async with (
+            asyncio.timeout(60),
+            Client(create_server(trader), elicitation_callback=dialog) as c,
+        ):
+            status = (await c.call_tool("setup_status", {})).structured_content
+            self.assertEqual(
+                (status["trading"]["trading"], status["trading"]["trading_source"]), ("on", "file")
+            )
+            closed = await c.call_tool("close_position", {})
+            self.assertFalse(closed.is_error, closed.content)
+            self.assertEqual(closed.structured_content["status"], "accepted")
+        self.assertTrue(self.fixture.admitted()[0]["action"]["reduce_only"])
+        self.assertEqual((asked, profile.opened), ([], []))  # No dialog, no page.
+
+
 class McpConfigAndMarketTests(unittest.TestCase):
     def test_configuration_is_explicit(self) -> None:
         config = load_config({"FAIRVENUE_HOME": "/tmp/x/../fairvenue"})
         self.assertEqual(str(config.home), "/tmp/fairvenue")
-        self.assertEqual(config.trading_mode, "ask")
+        # Unset (or empty): the settings file decides, else "ask".
+        self.assertIsNone(config.trading_mode)
+        self.assertIsNone(load_config({"FAIRVENUE_TRADING": " "}).trading_mode)
+        self.assertEqual(config.settings_file, Path.home() / ".fairvenue" / "settings.json")
         # A fresh season 2 profile. The season 1 profile (ts2-testnet) is never reused.
         self.assertTrue(str(load_config({}).home).endswith(".fairvenue/ts2-season2"))
         self.assertEqual(load_config({"FAIRVENUE_TRADING": "on"}).trading_mode, "on")
         self.assertEqual(load_config({"FAIRVENUE_TRADING": "off"}).trading_mode, "off")
+        self.assertEqual(load_config({"FAIRVENUE_TRADING": "ask"}).trading_mode, "ask")
         self.assertEqual(str(config.limits.max_order_notional), "1000")
         # GTC orders keep resting 23 hours by default. Shorter is a choice.
         self.assertEqual(config.gtc_lifetime_ms, 23 * 3_600_000)

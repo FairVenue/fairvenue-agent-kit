@@ -4,13 +4,23 @@
 teaches the agent how the testnet works and the MCP server lets it act: connect your account,
 read your balances and position, read the market, sign orders within your limits and recover
 requests whose outcome is unknown. You only click: once in the browser to create a key, and once
-in a dialog (or a browser page, when your client cannot show the dialog) to allow trading.
+to allow trading in a dialog or a browser page. When your client can ask neither, the agent
+switches trading on for this computer with one command, which your client asks you to approve.
 
 It runs locally over stdio on macOS and Linux (Windows through WSL). It is built on the native SDK
 in [`experimental/native-testnet`](../experimental/native-testnet/README.md), so it keeps the same
 exact-original recovery rules, and it only talks to the approved HTTPS origin from the installed
 pins. This is an operator-run Arbitrum Sepolia TESTNET with mock USDC. It handles no real funds,
 does not connect to mainnet and never routes an order to another venue.
+
+## What's new in 0.4.2
+
+**A trading switch that works in every client.** Codex starts plugin servers with a short fixed
+list of environment variables, so a `FAIRVENUE_TRADING` exported in your shell never reaches the
+server there. The server now also reads `~/.fairvenue/settings.json` at every signed call, so a
+change applies at once without a restart. When your client cannot ask you and you asked the agent
+to trade, the agent runs the command that writes the file and tells you how to undo it. See
+[The trading switch file](#the-trading-switch-file).
 
 ## What's new in 0.4.1
 
@@ -54,7 +64,7 @@ Season 2 is a fresh deployment, so everyone updates once and creates one new key
      and `codex plugin add fairvenue@fairvenue`, and restart Codex.
    - Cursor, VS Code, Claude Desktop and other `uvx` setups: run the server command once with
      `--refresh`, for example `uvx --refresh --from "fairvenue-schema6-agent[mcp] @ git+https://github.com/FairVenue/fairvenue-agent-kit@main#subdirectory=experimental/native-testnet" fairvenue-mcp --version`.
-     It prints `fairvenue-mcp 0.4.1`. Then restart the client.
+     It prints `fairvenue-mcp 0.4.2`. Then restart the client.
 2. **Create a new key.** Ask your agent *"Connect me to the FairVenue TESTNET"*.
    `connect_account` opens the key page. Sign in with Google and click
    **Create API key & download JSON**. Your account gets 1,000 test USDC once in season 2, right
@@ -66,8 +76,9 @@ and are not used.
 
 ## Who should install it
 
-- **Claude Code and Codex:** recommended. One plugin command installs the skill and the server,
-  and the skill offers it by default (it asks before installing anything).
+- **Claude Code and Codex:** recommended. One plugin command installs the skill and the server.
+  With the skill loaded, the agent installs the server itself when it is missing, and your
+  client asks you to approve each command.
 - **Cursor, VS Code, Claude Desktop:** optional. It needs `uv` and a short config entry. Clients
   that cannot show the trading dialog get a confirmation page in the browser instead.
 - **Prize-seeking hackathon bots:** use the server to explore, test and build, then run a
@@ -122,8 +133,9 @@ args = ["--from", "fairvenue-schema6-agent[mcp] @ git+https://github.com/FairVen
 ```
 
 If your Codex version can't show MCP confirmation dialogs, the server asks on a confirmation page
-in your browser instead (version 0.4.1 and later). Without a desktop browser, allow trading up
-front with `[mcp_servers.fairvenue.env]` and `FAIRVENUE_TRADING = "on"`.
+in your browser instead. The switch that always works in Codex is
+[the trading switch file](#the-trading-switch-file). Codex does not pass variables exported in
+your shell to plugin servers.
 
 ### Cursor, VS Code, Claude Desktop and other MCP clients
 
@@ -169,9 +181,11 @@ npx skills add FairVenue/fairvenue-agent-kit --skill fairvenue
   `scp fairvenue-*.json remote:~/fairvenue-key/`. Then ask the agent to import it with
   `import_agent_key` and that path, or to search the folder with `find_agent_key_downloads`.
   The server copies it into its profile with mode 0600. Then delete the copies you made.
-- With the Claude Code or Codex plugin there is no `env` entry to edit. Export the variable in
-  the shell that starts the client instead, for example
-  `export FAIRVENUE_DOWNLOAD_DIRS=/mnt/c/Users/<you>/Downloads`.
+- With the Claude Code plugin there is no `env` entry to edit. Export the variable in the shell
+  that starts Claude Code instead, for example
+  `export FAIRVENUE_DOWNLOAD_DIRS=/mnt/c/Users/<you>/Downloads`. Claude Code passes its
+  environment to plugin servers. Codex passes only a short fixed list, so there ask the agent to
+  call `find_agent_key_downloads` with the folder, or `import_agent_key` with the file.
 
 ### Pin a reviewed commit
 
@@ -221,10 +235,41 @@ When the client cannot show the dialog, the server asks in your browser instead:
   again. The page keeps listening for 10 minutes and the next call picks up your click. A call
   that finds it still unanswered shows it again.
 - The secret page address goes only to your browser. It is never shown to the agent, logged or
-  journaled, so the agent cannot approve trading by itself. That is why there is no link with
+  journaled, so the agent cannot click it for you. That is why there is no link with
   `FAIRVENUE_OPEN_BROWSER=0` or without a desktop browser. A remote machine's `127.0.0.1` page
-  would not open on your own computer anyway. Allow trading up front there with
-  `FAIRVENUE_TRADING=on`.
+  would not open on your own computer anyway. The trading switch file below works there.
+
+### The trading switch file
+
+`~/.fairvenue/settings.json` holds `{"trading": "on"}`, `"ask"` or `"off"` for every FairVenue
+MCP session on this computer, in every client. The server reads it at every signed call, so a
+change applies at once without a restart. `on` trades without asking, within the limits. `off`
+signs nothing.
+
+When the client could not ask you, the refusal tells the agent to run this command if you asked
+it to trade, and the agent runs it. Your client asks you to approve the command, and that
+approval is your confirmation. You can also run it yourself:
+
+```bash
+mkdir -p ~/.fairvenue && printf '{"trading":"on"}\n' > ~/.fairvenue/settings.json && chmod 600 ~/.fairvenue/settings.json
+```
+
+Undo it with `rm ~/.fairvenue/settings.json`.
+
+- `FAIRVENUE_TRADING`, when the server receives it, wins over the file.
+- The server ignores the file and falls back to `ask` when it is a symlink or not a regular file,
+  belongs to another user, is writable by others, is not valid JSON or holds another value.
+  `setup_status` then names the file and the reason, never its contents. A broken file never
+  switches trading on.
+- `disable_trading` pauses trading for the session even with the file on. `enable_trading`
+  resumes it without asking again.
+- **Codex:** use the file. Codex passes plugin servers only a short fixed list of environment
+  variables, so `FAIRVENUE_TRADING` from your shell never arrives. Do not replace the plugin's
+  server with your own `[mcp_servers.fairvenue]` entry for this: it would point at a
+  version-specific plugin path that every update breaks.
+- **Claude Code:** the file, or `FAIRVENUE_TRADING=on` exported in the shell that starts Claude
+  Code. Claude Code passes its environment to plugin servers.
+- **Other clients:** the file, or `FAIRVENUE_TRADING` in the server entry's `env`.
 
 ## Tools
 
@@ -232,8 +277,8 @@ When the client cannot show the dialog, the server asks in your browser instead:
 | --- | --- |
 | `connect_account` | The whole setup in one call: pins, key page in the browser, key pickup, signed no-order check. |
 | `setup_status` | Local readiness, pending requests, trading switch, limits and the next step. No network. |
-| `enable_trading` | Asks the user now, in the one-click dialog or the browser confirmation page, to allow trading for the session. |
-| `disable_trading` | Stops signing until the user allows trading again. |
+| `enable_trading` | Asks the user now, in the one-click dialog or the browser confirmation page, to allow trading for the session. After `disable_trading` with the switch on, it resumes without asking. |
+| `disable_trading` | Stops signing for the session until `enable_trading`. |
 | `find_agent_key_downloads` | Lists downloaded TS2 keys with public fields only, for keys saved elsewhere. |
 | `import_agent_key` | Copies a key file into the profile (0600) and makes it active. Refuses V4 and season 1 keys. |
 | `get_account` | Signed read: balances, margin, PnL, position, fee mode, leverage, open orders, recent fills and their settlement. |
@@ -300,7 +345,7 @@ Read tools carry `readOnlyHint` (`get_account` too: it changes nothing). Signing
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `FAIRVENUE_TRADING` | `ask` | `ask`: one-click dialog (or the browser confirmation page) before the first signed action of a session. `on`: no question. `off`: never sign. |
+| `FAIRVENUE_TRADING` | unset | Wins over [the trading switch file](#the-trading-switch-file) when the client passes it (Codex does not). `ask` (the default without either): one-click dialog or browser confirmation page before the first signed action of a session. `on`: no question. `off`: never sign. |
 | `FAIRVENUE_MAX_ORDER_QUANTITY` | `0.01` | Default largest order in BTC. The dialog can change it for the session. |
 | `FAIRVENUE_MAX_ORDER_NOTIONAL` | `1000` | Default largest price times size in test USDC. |
 | `FAIRVENUE_MAX_PRICE_DEVIATION_BPS` | `500` | Refuse prices, and MARKET worst prices, further than this from the midpoint (or the mark when one side is empty). It also caps `max_slippage_bps`. |
@@ -310,7 +355,7 @@ Read tools carry `readOnlyHint` (`get_account` too: it changes nothing). Signing
 | `FAIRVENUE_INSTALLATION_FILE` | `$FAIRVENUE_HOME/installation.json` | Installed deployment pins. |
 | `FAIRVENUE_INSTALLATION_SHA256` | packaged pins | SHA256 of a separately reviewed pin file for the same TS2 deployment, for example another approved API origin. A new deployment needs an updated kit. |
 | `FAIRVENUE_DOWNLOAD_DIRS` | `~/Downloads` | Where `connect_account` watches for the key. Separate several with `:`. |
-| `FAIRVENUE_OPEN_BROWSER` | `on` | `0` or `off` makes `connect_account` only return the link, for remote or headless machines. It also turns off the browser confirmation page, so clients without the dialog need `FAIRVENUE_TRADING=on`. |
+| `FAIRVENUE_OPEN_BROWSER` | `on` | `0` or `off` makes `connect_account` only return the link, for remote or headless machines. It also turns off the browser confirmation page, so clients without the dialog need the trading switch file. |
 
 `fairvenue-mcp --check` prints the local setup status as JSON without starting the server.
 
@@ -323,11 +368,12 @@ Read tools carry `readOnlyHint` (`get_account` too: it changes nothing). Signing
 - **Old keys never become season 2 authority.** A V4 key file is refused with
   "TS2: create a new bot key" and a key of another deployment, such as a TS2 season 1 key, is
   refused too. Neither is ever converted.
-- **You decide in a dialog.** No order or account setting is signed until you click accept in
-  the trading dialog, or Allow on the browser confirmation page (or set `FAIRVENUE_TRADING=on`).
-  Signed reads (the connection check, `get_account`) and recovery lookups need no dialog. The
-  answer lasts for the server session only. The model cannot answer the dialog for you, and it
-  never sees the confirmation page's secret address.
+- **You decide.** No order or account setting is signed until you click accept in the trading
+  dialog or Allow on the browser confirmation page, or the trading switch says `on`. A dialog
+  answer lasts for the server session only. The model cannot answer the dialog for you and never
+  sees the confirmation page's secret address. It writes the switch file only after you asked it
+  to trade and your client could not ask you, through a command your client shows you first.
+  Signed reads (the connection check, `get_account`) and recovery lookups need no confirmation.
 - **The browser is opened, never driven.** `connect_account` only opens the key page, and the
   trading confirmation only its own `127.0.0.1` page, with your system's default browser. You
   sign in and click yourself.
@@ -348,6 +394,7 @@ Read tools carry `readOnlyHint` (`get_account` too: it changes nothing). Signing
 ## Files
 
 ```text
+~/.fairvenue/settings.json            the trading switch, 0600, written by you or your agent
 ~/.fairvenue/ts2-season2/             0700
   installation.json                   reviewed TS2 deployment pins, 0600
   keys/<agent>-<delegation>.json      imported TS2 bot keys, 0600

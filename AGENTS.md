@@ -11,8 +11,13 @@
   `fairvenue_schema6`; never edit the byte-identical protocol modules to suit it. Keep it local
   stdio. Never sign until the user accepts the trading dialog (an MCP elicitation the model
   cannot answer), clicks Allow on the one-shot loopback confirmation page (the fallback when the
-  client has no form elicitation or declines/cancels in under 1.5 s), or set
-  `FAIRVENUE_TRADING=on`, and keep that consent per server session. Never return, log or journal
+  client has no form elicitation or declines/cancels in under 1.5 s), or the trading switch says
+  on: `FAIRVENUE_TRADING`, else `{"trading": "on"}` in `~/.fairvenue/settings.json`. Read that file
+  at every signed call and ignore it (fall back to ask, with a `setup_status` warning that never
+  shows its contents) unless it is a regular, non-symlink file owned by the current user and not
+  group- or world-writable. The server never writes it. The agent writes it only with the fixed
+  command a refusal gives, after the user asked to trade, through the client's command approval.
+  Keep dialog consent per server session. Never return, log or journal
   the confirmation page URL or token, and keep a slower decline a decline. Open only the reviewed
   https key page and that `127.0.0.1` page, with the desktop opener, never a console browser over
   the stdio channel. Never return, log or journal a

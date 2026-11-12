@@ -51,6 +51,25 @@ book reconstruction engine. Generated integrations must implement their own reco
 Public `index_candles` reflect reference mid-price, not necessarily executed FairVenue trades.
 Unsigned settlement candidates and proof metadata are not evidence of onchain settlement.
 
+## Adapter rules
+
+- Keep transport separate from strategy decisions and configuration. Read `meta` on startup and
+  require API `v1`, environment `testnet`, settlement `virtual` and a matching market, tick and
+  size configuration. Do not hardcode fee rates or quote freshness assumptions.
+- Use decimal strings or `Decimal` for money, and the SDK's signing and nonce handling. Use `Alo`
+  for post-only, a price-protected `Ioc` for taker behavior and `reduce_only` to close. A
+  partially filled IOC is not a full close.
+- After a transport timeout, reconcile by transaction hash or stable client order ID before
+  retrying. Keep retries bounded and stop and report unresolved state rather than sending an
+  unlimited series of replacement orders. Respect `retry_after_ms` and reserve cancel and
+  dead-man-switch capacity.
+- Use a dedicated bot agent key, never the browser's UI key or a browser or Google token. Send
+  signatures only to the approved FairVenue base URL and the seed nowhere. Public reads need no
+  credentials, so never use a private token for them.
+- Keep the user's language. If Python does not fit, use this documented protocol and the
+  cross-language signing vector, not an invented wire contract. Without access, build and test
+  against mocks instead of inventing a live connection.
+
 ## Deeper public references
 
 Open only those needed for the integration, at the same reviewed SDK commit where possible:
