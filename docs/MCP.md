@@ -4,13 +4,25 @@
 teaches the agent how the testnet works and the MCP server lets it act: connect your account,
 read your balances and position, read the market, sign orders within your limits and recover
 requests whose outcome is unknown. You only click: once in the browser to create a key, and once
-in a dialog to allow trading.
+in a dialog (or a browser page, when your client cannot show the dialog) to allow trading.
 
 It runs locally over stdio on macOS and Linux (Windows through WSL). It is built on the native SDK
 in [`experimental/native-testnet`](../experimental/native-testnet/README.md), so it keeps the same
 exact-original recovery rules, and it only talks to the approved HTTPS origin from the installed
 pins. This is an operator-run Arbitrum Sepolia TESTNET with mock USDC. It handles no real funds,
 does not connect to mainnet and never routes an order to another venue.
+
+## What's new in 0.4.1
+
+**Browser confirmation when the client cannot show the dialog.** Some clients advertise MCP
+dialogs but answer them without showing anything. Codex did, so `enable_trading` and the first
+order or `close_position` failed with "The user did not allow trading" although nobody was asked.
+The trading dialog stays the first choice. When the client has no dialogs, or a decline or cancel
+comes back in under 1.5 seconds (faster than anyone can read the question), the server opens a
+one-shot confirmation page in your browser with the same question and limits. Click **Allow**
+and the original call goes on, for example the position closes. Click **Deny** and nothing is
+signed. A decline that takes longer stays your answer. See
+[Allowing trading](#allowing-trading).
 
 ## What's new in 0.4.0
 
@@ -42,7 +54,7 @@ Season 2 is a fresh deployment, so everyone updates once and creates one new key
      and `codex plugin add fairvenue@fairvenue`, and restart Codex.
    - Cursor, VS Code, Claude Desktop and other `uvx` setups: run the server command once with
      `--refresh`, for example `uvx --refresh --from "fairvenue-schema6-agent[mcp] @ git+https://github.com/FairVenue/fairvenue-agent-kit@main#subdirectory=experimental/native-testnet" fairvenue-mcp --version`.
-     It prints `fairvenue-mcp 0.4.0`. Then restart the client.
+     It prints `fairvenue-mcp 0.4.1`. Then restart the client.
 2. **Create a new key.** Ask your agent *"Connect me to the FairVenue TESTNET"*.
    `connect_account` opens the key page. Sign in with Google and click
    **Create API key & download JSON**. Your account gets 1,000 test USDC once in season 2, right
@@ -56,8 +68,8 @@ and are not used.
 
 - **Claude Code and Codex:** recommended. One plugin command installs the skill and the server,
   and the skill offers it by default (it asks before installing anything).
-- **Cursor, VS Code, Claude Desktop:** optional. It needs `uv` and a short config entry, and some
-  clients need `FAIRVENUE_TRADING=on` because they cannot show the trading dialog.
+- **Cursor, VS Code, Claude Desktop:** optional. It needs `uv` and a short config entry. Clients
+  that cannot show the trading dialog get a confirmation page in the browser instead.
 - **Prize-seeking hackathon bots:** use the server to explore, test and build, then run a
   standalone bot with the native SDK and its own key. Prizes need a full UTC day of hourly
   returns, which a chat session rarely covers.
@@ -109,8 +121,9 @@ command = "uvx"
 args = ["--from", "fairvenue-schema6-agent[mcp] @ git+https://github.com/FairVenue/fairvenue-agent-kit@main#subdirectory=experimental/native-testnet", "fairvenue-mcp"]
 ```
 
-If your Codex version can't show MCP confirmation dialogs, allow trading up front with
-`[mcp_servers.fairvenue.env]` and `FAIRVENUE_TRADING = "on"`.
+If your Codex version can't show MCP confirmation dialogs, the server asks on a confirmation page
+in your browser instead (version 0.4.1 and later). Without a desktop browser, allow trading up
+front with `[mcp_servers.fairvenue.env]` and `FAIRVENUE_TRADING = "on"`.
 
 ### Cursor, VS Code, Claude Desktop and other MCP clients
 
@@ -185,11 +198,33 @@ calls `connect_account`, which does the rest:
    and deletes the copy in Downloads. Nobody sees the key's contents.
 5. It runs a signed check that submits no order and reports your public owner address.
 
+### Allowing trading
+
 You don't type anything in between. The first time the agent signs an order or an account
 setting, your client shows one dialog: **Allow trading for this session**, with the per-order
 limits filled in. Click accept and the agent trades within those limits until the session ends,
-or until it calls `disable_trading`. Clients that can't show MCP dialogs need
-`FAIRVENUE_TRADING=on` instead.
+or until it calls `disable_trading`.
+
+When the client cannot show the dialog, the server asks in your browser instead:
+
+- It falls back when the client has no MCP dialogs, or when a decline or cancel comes back in
+  under 1.5 seconds. Nobody reads the question that fast. Codex answered it in about 5 ms
+  without showing anything. A decline or cancel that takes longer is your answer, and nothing
+  is signed.
+- The page opens at `http://127.0.0.1` on a random port, under a random secret path. It shows
+  the same question and limits as the dialog, with **Allow** and **Deny**. Allow uses the
+  default limits (the `FAIRVENUE_MAX_*` settings). Only the page itself can answer. Requests
+  from other sites or other host names are refused.
+- The tool call waits up to 45 seconds for your click. After Allow the original call goes on,
+  so the order is placed or the position closes. After Deny nothing is signed.
+- If you don't click in time, the agent asks you to approve in the browser page and then to ask
+  again. The page keeps listening for 10 minutes and the next call picks up your click. A call
+  that finds it still unanswered shows it again.
+- The secret page address goes only to your browser. It is never shown to the agent, logged or
+  journaled, so the agent cannot approve trading by itself. That is why there is no link with
+  `FAIRVENUE_OPEN_BROWSER=0` or without a desktop browser. A remote machine's `127.0.0.1` page
+  would not open on your own computer anyway. Allow trading up front there with
+  `FAIRVENUE_TRADING=on`.
 
 ## Tools
 
@@ -197,7 +232,7 @@ or until it calls `disable_trading`. Clients that can't show MCP dialogs need
 | --- | --- |
 | `connect_account` | The whole setup in one call: pins, key page in the browser, key pickup, signed no-order check. |
 | `setup_status` | Local readiness, pending requests, trading switch, limits and the next step. No network. |
-| `enable_trading` | Asks the user now, in the one-click dialog, to allow trading for the session. |
+| `enable_trading` | Asks the user now, in the one-click dialog or the browser confirmation page, to allow trading for the session. |
 | `disable_trading` | Stops signing until the user allows trading again. |
 | `find_agent_key_downloads` | Lists downloaded TS2 keys with public fields only, for keys saved elsewhere. |
 | `import_agent_key` | Copies a key file into the profile (0600) and makes it active. Refuses V4 and season 1 keys. |
@@ -265,7 +300,7 @@ Read tools carry `readOnlyHint` (`get_account` too: it changes nothing). Signing
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `FAIRVENUE_TRADING` | `ask` | `ask`: one-click dialog before the first signed action of a session. `on`: no dialog. `off`: never sign. |
+| `FAIRVENUE_TRADING` | `ask` | `ask`: one-click dialog (or the browser confirmation page) before the first signed action of a session. `on`: no question. `off`: never sign. |
 | `FAIRVENUE_MAX_ORDER_QUANTITY` | `0.01` | Default largest order in BTC. The dialog can change it for the session. |
 | `FAIRVENUE_MAX_ORDER_NOTIONAL` | `1000` | Default largest price times size in test USDC. |
 | `FAIRVENUE_MAX_PRICE_DEVIATION_BPS` | `500` | Refuse prices, and MARKET worst prices, further than this from the midpoint (or the mark when one side is empty). It also caps `max_slippage_bps`. |
@@ -275,7 +310,7 @@ Read tools carry `readOnlyHint` (`get_account` too: it changes nothing). Signing
 | `FAIRVENUE_INSTALLATION_FILE` | `$FAIRVENUE_HOME/installation.json` | Installed deployment pins. |
 | `FAIRVENUE_INSTALLATION_SHA256` | packaged pins | SHA256 of a separately reviewed pin file for the same TS2 deployment, for example another approved API origin. A new deployment needs an updated kit. |
 | `FAIRVENUE_DOWNLOAD_DIRS` | `~/Downloads` | Where `connect_account` watches for the key. Separate several with `:`. |
-| `FAIRVENUE_OPEN_BROWSER` | `on` | `0` or `off` makes `connect_account` only return the link, for remote or headless machines. |
+| `FAIRVENUE_OPEN_BROWSER` | `on` | `0` or `off` makes `connect_account` only return the link, for remote or headless machines. It also turns off the browser confirmation page, so clients without the dialog need `FAIRVENUE_TRADING=on`. |
 
 `fairvenue-mcp --check` prints the local setup status as JSON without starting the server.
 
@@ -289,11 +324,13 @@ Read tools carry `readOnlyHint` (`get_account` too: it changes nothing). Signing
   "TS2: create a new bot key" and a key of another deployment, such as a TS2 season 1 key, is
   refused too. Neither is ever converted.
 - **You decide in a dialog.** No order or account setting is signed until you click accept in
-  the trading dialog (or set `FAIRVENUE_TRADING=on`). Signed reads (the connection check,
-  `get_account`) and recovery lookups need no dialog. The answer lasts for the server session
-  only. The model cannot answer the dialog for you.
-- **The browser is opened, never driven.** `connect_account` only opens the key page with your
-  system's default browser. You sign in and click yourself.
+  the trading dialog, or Allow on the browser confirmation page (or set `FAIRVENUE_TRADING=on`).
+  Signed reads (the connection check, `get_account`) and recovery lookups need no dialog. The
+  answer lasts for the server session only. The model cannot answer the dialog for you, and it
+  never sees the confirmation page's secret address.
+- **The browser is opened, never driven.** `connect_account` only opens the key page, and the
+  trading confirmation only its own `127.0.0.1` page, with your system's default browser. You
+  sign in and click yourself.
 - **Local guards** refuse orders above the size or notional limits, prices or MARKET worst prices
   far from the reference, prices off the tick and sizes off the step (never rounded), post-only
   orders that would cross, and anything but cancels while trading is paused.

@@ -5,4 +5,4 @@ seeds in model context, never routes to another venue and keeps the SDK's
 exact-original recovery rules. Install with the ``mcp`` extra.
 """
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"

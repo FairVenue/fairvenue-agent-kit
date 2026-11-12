@@ -5,7 +5,8 @@ Run ``fairvenue-mcp`` (or ``python -m fairvenue_mcp``). Configuration comes from
 
 The user only clicks: ``connect_account`` opens the key page in the browser and
 picks up the downloaded key itself, and the first signed action shows a
-one-click dialog that allows trading for the session.
+one-click dialog that allows trading for the session. A client that cannot show
+the dialog gets a one-shot confirmation page in the browser instead.
 
 No ``from __future__ import annotations`` here: the confirmation parameter types
 are local to ``create_server``, and the MCP SDK evaluates tool annotations.
@@ -16,6 +17,7 @@ import asyncio
 import json
 import math
 import sys
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from decimal import Decimal
@@ -29,15 +31,15 @@ from pydantic import BaseModel, Field
 
 from . import __version__, guide
 from .config import ConfigError, Limits, load_config
-from .market import fmt
 from .profile import SetupError
-from .trading import (
-    TRADING_DECLINED,
-    TRADING_FORCED_OFF,
-    TRADING_NEEDS_CONFIRMATION,
-    ToolProblem,
-    Trader,
-)
+from .trading import TRADING_DECLINED, TRADING_FORCED_OFF, ToolProblem, Trader
+
+#: A decline or cancel that comes back faster than this, measured from sending the
+#: question, was not a person reading the dialog: some clients advertise form
+#: elicitation and answer it without showing anything (Codex did in about 5 ms).
+#: Such an answer falls back to the browser confirmation page. A slower decline or
+#: cancel is the user's own answer.
+FAST_ANSWER_SECONDS = 1.5
 
 T = TypeVar("T")
 Topic = Literal["overview", "setup", "trading", "recovery", "hackathon", "bot"]
@@ -167,9 +169,14 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
     # A resolver runs before the tool body. It either says no question is needed,
     # or returns an Elicit marker: the client then shows the user a dialog (mid-call
     # on protocol 2025-11-25 and older, as an input round trip on 2026-07-28), and
-    # the tool body runs only once the user has answered.
+    # the tool body runs only once the user has answered. Without form elicitation,
+    # or after an answer faster than FAST_ANSWER_SECONDS, the user is asked on a
+    # one-shot page in the browser instead (Trader.confirm_in_browser).
+
+    asked_at = 0.0  # When the dialog question was last sent.
 
     async def ask_trading_consent(ctx: Context[Any, Any]) -> Any:
+        nonlocal asked_at
         state = agent().trading_state()
         if state in ("on", "confirmed"):
             return "allowed"
@@ -179,14 +186,12 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
         elicitation = capabilities.elicitation if capabilities is not None else None
         if elicitation is None or (elicitation.form is None and elicitation.url is not None):
             return "no_dialog"
-        limits = agent().config.limits
+        if not ctx.input_responses:
+            # On 2026-07-28 the answer comes in a retried call that carries input
+            # responses, so the clock runs from the round that asked.
+            asked_at = time.monotonic()
         return Elicit(
-            "Allow this agent to sign orders and account settings on the FairVenue TESTNET for "
-            "this session? Mock USDC only, no real funds. Each order: at most "
-            f"{fmt(limits.max_order_quantity)} BTC and {fmt(limits.max_order_notional)} test "
-            f"USDC, priced within {fmt(limits.max_price_deviation_bps / 100)}% of the market. "
-            "Market orders stay within that distance too. Leave the limits empty to keep these "
-            "values.",
+            agent().consent_question() + " Leave the limits empty to keep these values.",
             TradingConsent,
         )
 
@@ -196,12 +201,17 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
     Consent = Annotated[ElicitationResult[TradingConsent], Resolve(ask_trading_consent)]
     OrderConsent = Annotated[ElicitationResult[TradingConsent], Resolve(ask_unless_dry_run)]
 
-    def apply_consent(consent: Any) -> None:
+    async def apply_consent(consent: Any) -> None:
         if not isinstance(consent, AcceptedElicitation):
-            raise ToolError(TRADING_DECLINED)
+            if time.monotonic() - asked_at >= FAST_ANSWER_SECONDS:
+                agent().discard_browser_confirmation()  # The user's latest answer wins.
+                raise ToolError(TRADING_DECLINED)
+            await run(lambda t: t.confirm_in_browser())  # Answered without the user.
+            return
         answer = consent.data
         if isinstance(answer, TradingConsent):
             if not answer.allow:
+                agent().discard_browser_confirmation()
                 raise ToolError(TRADING_DECLINED)
             base = agent().config.limits
             limits = Limits(
@@ -211,14 +221,11 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
                     answer.max_percent_from_market, base.max_price_deviation_bps, 100
                 ),
             )
-            try:
-                agent().grant_consent(limits)
-            except ToolProblem as problem:
-                raise ToolError(str(problem)) from None
+            await local(lambda t: t.grant_consent(limits))
         elif answer == "off":
             raise ToolError(TRADING_FORCED_OFF)
         elif answer == "no_dialog":
-            raise ToolError(TRADING_NEEDS_CONFIRMATION)
+            await run(lambda t: t.confirm_in_browser())
 
     # Setup ----------------------------------------------------------------------
 
@@ -254,9 +261,11 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
     async def enable_trading(consent: Consent) -> dict[str, Any]:
         """Ask the user, in a one-click dialog, to allow trading for this session.
 
-        Optional: the first signed action asks by itself. Returns the limits in force.
+        Optional: the first signed action asks by itself. A client that cannot show
+        the dialog gets a confirmation page in the user's browser instead. Returns the
+        limits in force.
         """
-        apply_consent(consent)
+        await apply_consent(consent)
         return {"status": "allowed", **agent().limits_view()}
 
     @server.tool(title="Stop trading", annotations=LOCAL_SETUP)
@@ -375,15 +384,16 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
 
         LIMIT (GTC, post-only GTC, IOC or FOK) or MARKET (IOC or FOK with a worst
         price max_slippage_bps beyond the best opposite price). The first signed
-        action of a session shows the user a one-click dialog to allow trading.
-        Refuses prices off the tick and sizes off the step (nothing is rounded),
-        enforces the size, notional and price-distance limits, and refuses
+        action of a session shows the user a one-click dialog to allow trading, or a
+        confirmation page in the browser when the client cannot show it. Refuses
+        prices off the tick and sizes off the step (nothing is rounded), enforces
+        the size, notional and price-distance limits, and refuses
         locally while trading is paused. Status: accepted (journaled, with the
         order_id that cancel_order takes) or rejected, not_placed, not_executed or
         failed (nothing happened, a new request is safe), blocked (another request
         is pending) or outcome_unknown (call recover_pending_request, never resend).
         """
-        apply_consent(consent)
+        await apply_consent(consent)
         return await run(
             lambda t: t.place(
                 dry_run=dry_run,
@@ -420,7 +430,7 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
         distance limit does. Works while the mark lags. Shows the same statuses
         as place_order.
         """
-        apply_consent(consent)
+        await apply_consent(consent)
         return await run(
             lambda t: t.close_position(
                 quantity=quantity, max_slippage_bps=max_slippage_bps, dry_run=dry_run
@@ -433,7 +443,7 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
         consent: Consent,
     ) -> dict[str, Any]:
         """Cancel one order by its 0x order ID. place_order and get_account return it."""
-        apply_consent(consent)
+        await apply_consent(consent)
         return await run(lambda t: t.cancel(order_id=order_id))
 
     @server.tool(title="Cancel all orders", annotations=SIGNED_ACTION)
@@ -443,7 +453,7 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
         Orders placed after it are not affected. It leaves the dead man's switch as
         it is. Cancels are still sent while trading is paused, the exchange decides.
         """
-        apply_consent(consent)
+        await apply_consent(consent)
         return await run(lambda t: t.cancel_all())
 
     @server.tool(title="Dead man's switch", annotations=SIGNED_ACTION)
@@ -463,7 +473,7 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
 
         Right after the deadline every resting and FairLag-held order is cancelled.
         """
-        apply_consent(consent)
+        await apply_consent(consent)
         return await run(
             lambda t: t.dead_man_switch(seconds=seconds, purpose="set_dead_man_switch")
         )
@@ -477,7 +487,7 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
     ) -> dict[str, Any]:
         """Set the account's leverage. It can rise at any time. It can fall only with no
         position and no working orders. A refusal explains that rule. Asks for consent."""
-        apply_consent(consent)
+        await apply_consent(consent)
         return await run(lambda t: t.leverage(leverage=leverage))
 
     @server.tool(title="Set fee mode", annotations=SIGNED_ACTION)
@@ -493,7 +503,7 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
         Every later order carries this mode. A refusal explains that rule. Asks for
         consent.
         """
-        apply_consent(consent)
+        await apply_consent(consent)
         return await run(lambda t: t.fee_mode(mode=mode))
 
     @server.tool(title="Recover pending request", annotations=SIGNED_SETUP)

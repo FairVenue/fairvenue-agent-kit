@@ -29,7 +29,9 @@ the seed.
 as a key of a previous deployment, or with "TS2: create a new bot key". The user creates a new \
 one on the key page.
 - The first signed action of a session shows the user a one-click dialog to allow trading, \
-with limits. If the client cannot show it, the user sets FAIRVENUE_TRADING=on. dry_run=true \
+with limits. If the client cannot show it, the same question opens as a page in the user's \
+browser and the call waits for the click. If it times out, relay its message and call again \
+once the user approved. Without a browser, the user sets FAIRVENUE_TRADING=on. dry_run=true \
 previews an order without signing. Respect the limits instead of working around them.
 - get_account shows balances, margin, the position, open orders and recent fills. Read it \
 before and after trading.
@@ -95,8 +97,10 @@ profile with mode 0600 and removes the downloaded copy. Nobody sees the key's co
 4. It initializes the key's continuity database and runs a signed no-order check. The result \
 names the public owner address, which also identifies hackathon winners.
 5. The first signed order asks the user once, in a dialog, to allow trading for the session. \
-They can adjust the per-order limits there. Without dialog support, FAIRVENUE_TRADING=on and \
-the FAIRVENUE_MAX_ORDER_* variables do the same.
+They can adjust the per-order limits there. A client that cannot show the dialog gets the same \
+question on a one-shot page in the browser, with Allow and Deny and the default limits. Without \
+a browser on this computer, FAIRVENUE_TRADING=on and the FAIRVENUE_MAX_ORDER_* variables do the \
+same.
 
 WSL: the browser saves to Windows, so set FAIRVENUE_DOWNLOAD_DIRS to \
 /mnt/c/Users/<you>/Downloads in the server environment. Remote or SSH machines: set \
@@ -270,7 +274,7 @@ def trading_session_prompt(strategy: str, minutes: int, max_orders: int) -> str:
         f"{max_orders} signed orders. Strategy: {strategy}\n\n"
         "Protocol:\n"
         "1. connect_account if setup_status says anything is not ready. The first order "
-        "asks me once, in a dialog, to allow trading.\n"
+        "asks me once, in a dialog or a browser page, to allow trading.\n"
         "2. get_account, get_market and get_price_history to form a view. Explain it in two "
         "sentences.\n"
         "3. Arm set_dead_man_switch for 120 seconds and refresh it at least every minute.\n"

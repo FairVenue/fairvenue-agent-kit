@@ -4,7 +4,7 @@ The `fairvenue` MCP server runs locally over stdio and signs native TESTNET requ
 user's bot key. It never returns a seed, asks the user in a dialog before it signs an order or
 an account setting and follows the exact-original recovery rules in
 [native-testnet.md](native-testnet.md). The user only clicks: once in the browser to create a
-key and once in the dialog to allow trading.
+key and once in the dialog (or a browser confirmation page) to allow trading.
 
 Version 0.4.0 speaks TS2 season 2. Earlier versions cannot connect, so if `setup_status` shows a
 version below 0.4.0, ask the user to update (the commands are below) and restart the client. Bot
@@ -19,7 +19,7 @@ matching engine, not by the proof.
 - **Claude Code and Codex:** offer it by default, once per conversation, before other native
   setup. Ask before installing anything.
 - **Cursor, VS Code, Claude Desktop and other clients:** mention it as an option. It needs `uv`
-  and a config entry, and some clients cannot show the trading dialog.
+  and a config entry. Clients that cannot show the trading dialog get a browser page instead.
 - **Prize-seeking hackathon participants:** the server is for exploring, testing and building.
   Prizes need a full UTC day of hourly returns, so steer them to a standalone bot with the
   native SDK and its own key.
@@ -42,7 +42,7 @@ installing anything on the user's machine.
   and arguments
   `--from "fairvenue-schema6-agent[mcp] @ git+https://github.com/FairVenue/fairvenue-agent-kit@main#subdirectory=experimental/native-testnet" fairvenue-mcp`.
   To update, run that command once with `--refresh` and `--version` added (it prints
-  `fairvenue-mcp 0.4.0`), then restart the client.
+  `fairvenue-mcp 0.4.1`), then restart the client.
 
 These commands follow the default branch. For anything the user relies on, pin the reviewed
 commit: `FairVenue/fairvenue-agent-kit@<commit>` in the marketplace commands and
@@ -68,9 +68,16 @@ type done or paste a key.
 The first signed order or account setting of a session shows the user one dialog to allow
 trading, with the per-order limits filled in (0.01 BTC, 1,000 test USDC and 5% from the market
 by default). The dialog's answer comes from the user, never from you. If the client cannot show
-MCP dialogs, the user sets `FAIRVENUE_TRADING=on` in the server environment instead.
-`disable_trading` stops signing for the rest of the session. `get_account` and dry runs never
-ask.
+MCP dialogs, or answers one in under 1.5 seconds without showing it, the server opens the same
+question as a one-shot page in the user's browser and the call waits for **Allow** or **Deny**.
+After Allow the original call goes on. If the call reports that the user has not answered yet,
+relay its words ("Approve trading in the browser page that just opened, then ask me again") and
+call the same tool again once the user says they approved. The page address is never shown to
+you. Without a desktop browser (`FAIRVENUE_OPEN_BROWSER=0`), the user sets
+`FAIRVENUE_TRADING=on` in the server environment instead. Server 0.4.0 treated a client's
+instant answer as a decline, so if trading fails with "The user did not allow trading" although
+the user saw no dialog, ask them to update to 0.4.1. `disable_trading` stops signing for the rest
+of the session. `get_account` and dry runs never ask.
 
 ## Tools
 

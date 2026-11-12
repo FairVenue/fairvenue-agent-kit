@@ -22,8 +22,9 @@ clicks.
   machine does the user copy the key file over, then you call `import_agent_key`.
 - Never open, print or upload a key file, even when you could.
 - The first signed order or account setting shows the user a one-click dialog to allow
-  trading. Never work around it or the limits. Use `dry_run` to show an order before it is
-  signed.
+  trading. A client that cannot show it gets a confirmation page in the user's browser instead.
+  If the call says the user has not answered yet, relay that and call again once they approved.
+  Never work around it or the limits. Use `dry_run` to show an order before it is signed.
 - Read `get_account` before and after trading: balances, margin, the position, open orders and
   fills. Use `close_position` to flatten, and keep MARKET `max_slippage_bps` small.
 - Treat `outcome_unknown` and `blocked` as unresolved: call `recover_pending_request` and send
@@ -40,7 +41,7 @@ clicks.
 
 **When the tools are missing, offer them where they fit.** In Claude Code and Codex, offer to
 connect the FairVenue MCP tools before any native TESTNET setup. It is the recommended path
-there: one plugin command, the user only clicks in the browser and in one trading dialog, and
+there: one plugin command, the user only clicks in the browser and to allow trading once, and
 you get account data, market data, signing and recovery as tools. In Cursor, VS Code, Claude
 Desktop and other clients, mention it as an option the user can choose, because it needs `uv`
 and a config entry. Say what it installs (a local stdio server run with `uvx`), ask before

@@ -7,26 +7,33 @@ synthetic TS2 fixture server. No hosted, funded, proof or live acceptance.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
+import dataclasses
 import hashlib
+import http.client
+import io
 import json
 import os
 import shutil
 import tempfile
+import threading
 import time
 import unittest
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
+from urllib.parse import urlencode, urlsplit
 
 from fairvenue_mcp import profile as profile_module
 from fairvenue_mcp import trading as trading_module
 from fairvenue_mcp.config import ConfigError, Limits, load_config
+from fairvenue_mcp.confirm import ConfirmationPage
 from fairvenue_mcp.journal import Journal
 from fairvenue_mcp.market import MarketDataError, parse_market
 from fairvenue_mcp.profile import SetupError
-from fairvenue_mcp.trading import ToolProblem, Trader
+from fairvenue_mcp.trading import ToolProblem, Trader, open_in_browser
 from fairvenue_schema6 import NativeTestnetClient, ts2
 
 from test_native_testnet import API, SEED, NativeFixture, market, not_placed
@@ -1005,15 +1012,275 @@ class McpProtocolTests(unittest.IsolatedAsyncioTestCase):
             preview = await client.call_tool("close_position", {"dry_run": True})
             self.assertFalse(preview.is_error, preview.content)
             self.assertEqual(asked, [])
+            # An instant decline is not the user's answer. It falls back to the browser
+            # page, and this test browser cannot be opened.
             declined = await client.call_tool("place_order", self.order)
             self.assertTrue(declined.is_error)
-            self.assertIn("did not allow trading", declined.content[0].text)
+            self.assertIn("cannot show the confirmation dialog", declined.content[0].text)
+            self.assertNotIn("127.0.0.1", declined.content[0].text)
         async with asyncio.timeout(60), Client(create_server(trader)) as client:
             unsupported = await client.call_tool("cancel_all_orders", {})
             self.assertTrue(unsupported.is_error)
             self.assertIn("FAIRVENUE_TRADING=on", unsupported.content[0].text)
         self.assertEqual(self.fixture.calls["admit"], 0)
         self.assertEqual(trader.trading_state(), "needs_confirmation")
+
+
+def click(url: str, decision: str, **headers: str) -> int:
+    """POST a decision to a confirmation page like the user's browser does."""
+    parts = urlsplit(url)
+    connection = http.client.HTTPConnection(str(parts.hostname), parts.port, timeout=5)
+    try:
+        connection.request(
+            "POST",
+            parts.path,
+            urlencode({"decision": decision}),
+            {
+                "Origin": f"http://{parts.netloc}",
+                "Content-Type": "application/x-www-form-urlencoded",
+                **headers,
+            },
+        )
+        return connection.getresponse().status
+    finally:
+        connection.close()
+
+
+def view(url: str) -> tuple[int, str]:
+    parts = urlsplit(url)
+    connection = http.client.HTTPConnection(str(parts.hostname), parts.port, timeout=5)
+    try:
+        connection.request("GET", parts.path)
+        response = connection.getresponse()
+        return response.status, response.read().decode()
+    finally:
+        connection.close()
+
+
+def answers(action: str, *, after: float = 0.0, asked: list[str] | None = None) -> Any:
+    """An elicitation callback that answers ``action`` after ``after`` seconds."""
+    from mcp_types import ElicitResult
+
+    async def callback(context: Any, params: Any) -> ElicitResult:
+        if asked is not None:
+            asked.append(params.message)
+        await asyncio.sleep(after)
+        return ElicitResult(action=action)
+
+    return callback
+
+
+class McpBrowserConfirmationTests(unittest.IsolatedAsyncioTestCase):
+    """Clients that cannot really show the dialog get a confirmation page in the browser."""
+
+    async def asyncSetUp(self) -> None:
+        self.fixture = NativeFixture()
+        self.order = {"side": "BUY", "quantity": "0.001", "price": "79990"}
+        self.opened: list[str] = []
+        self.answer: str | None = "allow"  # What the user clicks a moment after the page opens.
+
+    def browser(self, url: str) -> bool:
+        self.opened.append(url)
+        if self.answer is not None:
+            threading.Timer(0.3, click, (url, self.answer)).start()
+        return True
+
+    def trader(self, trading: str = "ask") -> Trader:
+        profile = Profile(self.fixture, trading=trading)
+        self.addCleanup(profile.cleanup)
+        trader = profile.trader(browser=self.browser)
+        self.addCleanup(trader.close)
+        trader.import_key(str(profile.download))
+        return trader
+
+    async def test_an_instant_decline_asks_in_the_browser_and_allow_closes_the_position(
+        self,
+    ) -> None:
+        from mcp import Client
+
+        from fairvenue_mcp.server import create_server
+
+        # "auto" negotiates 2026-07-28 (input round trip), "legacy" 2025-11-25 (mid-call).
+        for mode in ("auto", "legacy"):
+            with self.subTest(mode=mode):
+                self.fixture, self.opened = NativeFixture(), []
+                trader = self.trader()
+                asked: list[str] = []
+                async with (
+                    asyncio.timeout(60),
+                    Client(
+                        create_server(trader),
+                        mode=mode,
+                        elicitation_callback=answers("decline", asked=asked),
+                    ) as client,
+                ):
+                    closed = await client.call_tool("close_position", {})
+                    self.assertFalse(closed.is_error, closed.content)
+                    self.assertEqual(closed.structured_content["status"], "accepted")
+                    self.assertEqual((len(asked), len(self.opened)), (1, 1))
+                    self.assertTrue(self.opened[0].startswith("http://127.0.0.1:"))
+                    # Allowed for the session: the next signed call neither asks nor opens.
+                    cancelled = await client.call_tool("cancel_all_orders", {})
+                    self.assertEqual(cancelled.structured_content["status"], "accepted")
+                    self.assertEqual((len(asked), len(self.opened)), (1, 1))
+                self.assertTrue(self.fixture.admitted()[0]["action"]["reduce_only"])
+                self.assertEqual(trader.trading_state(), "confirmed")
+                self.assertEqual(trader.limits_view()["max_order_quantity_btc"], "0.01")
+                # The page token never reaches the model or the journal.
+                token = urlsplit(self.opened[0]).path[1:]
+                everything = json.dumps(trader.journal.tail(50)) + str(closed) + str(cancelled)
+                self.assertNotIn(token, everything)
+
+    async def test_a_client_without_dialogs_asks_in_the_browser(self) -> None:
+        from mcp import Client
+
+        from fairvenue_mcp.server import create_server
+
+        trader = self.trader()
+        async with asyncio.timeout(60), Client(create_server(trader)) as client:
+            placed = await client.call_tool("place_order", self.order)
+            self.assertFalse(placed.is_error, placed.content)
+            self.assertEqual(placed.structured_content["status"], "accepted")
+        self.assertEqual(len(self.opened), 1)
+        self.assertEqual(self.fixture.calls["admit"], 1)
+
+    async def test_a_slow_decline_or_cancel_is_the_users_answer(self) -> None:
+        from mcp import Client
+
+        from fairvenue_mcp import server as server_module
+
+        for mode in ("auto", "legacy"):
+            for action in ("decline", "cancel"):
+                with (
+                    self.subTest(mode=mode, action=action),
+                    patch.object(server_module, "FAST_ANSWER_SECONDS", 0.2),
+                ):
+                    trader = self.trader()
+                    async with (
+                        asyncio.timeout(60),
+                        Client(
+                            server_module.create_server(trader),
+                            mode=mode,
+                            elicitation_callback=answers(action, after=0.3),
+                        ) as client,
+                    ):
+                        declined = await client.call_tool("close_position", {})
+                    self.assertTrue(declined.is_error)
+                    self.assertIn("did not allow trading", declined.content[0].text)
+        self.assertEqual(self.opened, [])
+        self.assertEqual(self.fixture.calls["admit"], 0)
+
+    async def test_deny_in_the_browser_signs_nothing(self) -> None:
+        from mcp import Client
+
+        from fairvenue_mcp.server import create_server
+
+        self.answer = "deny"
+        trader = self.trader()
+        async with (
+            asyncio.timeout(60),
+            Client(create_server(trader), elicitation_callback=answers("cancel")) as client,
+        ):
+            denied = await client.call_tool("set_leverage", {"leverage": 5})
+        self.assertTrue(denied.is_error)
+        self.assertIn("did not allow trading", denied.content[0].text)
+        self.assertEqual(len(self.opened), 1)
+        self.assertEqual(trader.trading_state(), "needs_confirmation")
+        self.assertEqual(self.fixture.calls["admit"], 0)
+
+    async def test_no_click_in_time_keeps_the_page_for_a_later_call(self) -> None:
+        from mcp import Client
+
+        from fairvenue_mcp.server import create_server
+
+        self.answer = None  # The user is away for now.
+        trader = self.trader()
+        with patch.object(trading_module, "CONFIRM_WAIT_SECONDS", 0.3):
+            async with asyncio.timeout(60), Client(create_server(trader)) as client:
+                waiting = await client.call_tool("close_position", {})
+                self.assertTrue(waiting.is_error)
+                text = waiting.content[0].text
+                self.assertIn(
+                    "Approve trading in the browser page that just opened, then ask me again", text
+                )
+                self.assertNotIn("127.0.0.1", text)
+                # Asked again before any click: the same page is shown again.
+                again = await client.call_tool("close_position", {})
+                self.assertTrue(again.is_error)
+                self.assertEqual(len(self.opened), 2)
+                self.assertEqual(self.opened[0], self.opened[1])
+                # The user clicks Allow later. The next call picks it up and opens nothing.
+                self.assertEqual(await asyncio.to_thread(click, self.opened[0], "allow"), 200)
+                closed = await client.call_tool("close_position", {})
+                self.assertFalse(closed.is_error, closed.content)
+                self.assertEqual(closed.structured_content["status"], "accepted")
+        self.assertEqual(len(self.opened), 2)
+        self.assertEqual(self.fixture.calls["admit"], 1)
+
+    async def test_trading_off_and_dry_runs_never_ask_or_open_a_page(self) -> None:
+        from mcp import Client
+
+        from fairvenue_mcp.server import create_server
+
+        asked: list[str] = []
+        callback = answers("decline", asked=asked)
+        async with asyncio.timeout(60), Client(create_server(self.trader("off"))) as client:
+            refused = await client.call_tool("close_position", {})
+            self.assertIn("FAIRVENUE_TRADING=off", refused.content[0].text)
+        trader = self.trader()
+        for elicitation in (callback, None):
+            async with (
+                asyncio.timeout(60),
+                Client(create_server(trader), elicitation_callback=elicitation) as client,
+            ):
+                preview = await client.call_tool("close_position", {"dry_run": True})
+                self.assertFalse(preview.is_error, preview.content)
+                order = await client.call_tool("place_order", {**self.order, "dry_run": True})
+                self.assertEqual(order.structured_content["status"], "dry_run")
+        self.assertEqual((asked, self.opened), ([], []))
+        self.assertEqual(self.fixture.calls["admit"], 0)
+
+    async def test_without_a_browser_the_page_url_is_never_shown(self) -> None:
+        profile = Profile(self.fixture, trading="ask")
+        self.addCleanup(profile.cleanup)
+        trader = Trader(dataclasses.replace(profile.config, open_browser=False))
+        self.addCleanup(trader.close)
+        with self.assertRaisesRegex(ToolProblem, "FAIRVENUE_TRADING=on") as caught:
+            await trader.confirm_in_browser()
+        self.assertNotIn("http", str(caught.exception))
+        self.assertIsNone(trader._confirmation)  # No listener is left behind.
+
+    async def test_only_the_page_itself_can_answer(self) -> None:
+        page = ConfirmationPage("Allow <this> agent? At most 0.01 BTC.", lifetime=30)
+        self.addCleanup(page.close)
+        parts = urlsplit(page.url)
+        self.assertEqual((parts.scheme, parts.hostname), ("http", "127.0.0.1"))
+        self.assertGreaterEqual(len(parts.path), 40)
+        status, body = await asyncio.to_thread(view, page.url)
+        self.assertEqual(status, 200)
+        self.assertIn("Allow &lt;this&gt; agent? At most 0.01 BTC.", body)
+        self.assertIn('value="allow"', body)
+        self.assertEqual((await asyncio.to_thread(view, page.url + "x"))[0], 404)
+        wrong_token = f"http://{parts.netloc}/{'A' * 43}"
+        with contextlib.redirect_stderr(io.StringIO()) as logged:
+            for name, url, decision, headers, expected in (
+                ("wrong token", wrong_token, "allow", {}, 404),
+                ("foreign origin", page.url, "allow", {"Origin": "https://example.com"}, 403),
+                ("opaque origin", page.url, "allow", {"Origin": "null"}, 403),
+                ("no origin", page.url, "allow", {"Origin": ""}, 403),
+                ("rebound host", page.url, "allow", {"Host": f"rebind.test:{parts.port}"}, 403),
+                ("unknown answer", page.url, "maybe", {}, 400),
+            ):
+                with self.subTest(name):
+                    status = await asyncio.to_thread(click, url, decision, **headers)
+                    self.assertEqual(status, expected)
+            self.assertIsNone(page.decision)
+            self.assertEqual(await asyncio.to_thread(click, page.url, "allow"), 200)
+            self.assertEqual(await page.wait(1), "allow")
+        self.assertEqual(logged.getvalue(), "")  # Request lines carry the token: never logged.
+        # The opener takes https pages and this loopback page only.
+        self.assertFalse(open_in_browser("http://example.com/"))
+        self.assertFalse(open_in_browser("http://127.0.0.1:80@example.com/"))
 
 
 class McpConfigAndMarketTests(unittest.TestCase):

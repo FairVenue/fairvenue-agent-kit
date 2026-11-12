@@ -59,12 +59,14 @@ class Config:
     installation_file: Path
     installation_sha256: str
     key_file: Path | None
-    #: "ask" (default): the user confirms trading once per server session in a dialog.
+    #: "ask" (default): the user confirms trading once per server session in a dialog,
+    #: or on a browser page when the client cannot show it.
     #: "on": trading is allowed from the start. "off": never, whatever the user clicks.
     trading_mode: str
     limits: Limits
     download_dirs: tuple[Path, ...]
-    #: Whether connect_account may open the key page in the desktop browser.
+    #: Whether connect_account may open the key page, and the trading confirmation its
+    #: page, in the desktop browser.
     open_browser: bool = True
     #: How long a GTC order rests unless cancelled or filled.
     gtc_lifetime_ms: int = DEFAULT_GTC_LIFETIME_MINUTES * 60_000

@@ -215,8 +215,9 @@ independent replay, restart and exit acceptance remain separate release gates.
 The `mcp` extra adds `fairvenue_mcp`, a local stdio MCP server over this client for coding
 agents: `pip install './experimental/native-testnet[mcp]'` provides the `fairvenue-mcp`
 command. It is a kit extension, not imported protocol source. It never changes the protocol
-modules, signs no order or account setting until the user allows trading in a one-click dialog
-(or `FAIRVENUE_TRADING=on`), moves downloaded keys into an owner-private profile without
+modules, signs no order or account setting until the user allows trading in a one-click dialog,
+or on a one-shot `127.0.0.1` browser page when the client cannot show the dialog (or
+`FAIRVENUE_TRADING=on`), moves downloaded keys into an owner-private profile without
 returning their seed, reads the account with `account()`, signs with `submit()` and uses
 `recover_original()` for unknown outcomes. Installation and tools:
 [docs/MCP.md](../../docs/MCP.md).

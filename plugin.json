@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "fairvenue",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Skill and MCP server for building, testing and running trading agents on the FairVenue native TESTNET (Arbitrum Sepolia mock tokens, no real funds).",
   "author": {
     "name": "FairVenue",

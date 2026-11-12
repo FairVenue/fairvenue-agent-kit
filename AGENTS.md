@@ -10,9 +10,12 @@
 - The optional MCP server (`experimental/native-testnet/fairvenue_mcp`) wraps only
   `fairvenue_schema6`; never edit the byte-identical protocol modules to suit it. Keep it local
   stdio. Never sign until the user accepts the trading dialog (an MCP elicitation the model
-  cannot answer) or set `FAIRVENUE_TRADING=on`, and keep that consent per server session. Open
-  only the reviewed https key page, with the desktop opener, never a console browser over the
-  stdio channel. Never return, log or journal a
+  cannot answer), clicks Allow on the one-shot loopback confirmation page (the fallback when the
+  client has no form elicitation or declines/cancels in under 1.5 s), or set
+  `FAIRVENUE_TRADING=on`, and keep that consent per server session. Never return, log or journal
+  the confirmation page URL or token, and keep a slower decline a decline. Open only the reviewed
+  https key page and that `127.0.0.1` page, with the desktop opener, never a console browser over
+  the stdio channel. Never return, log or journal a
   seed, signature or signed envelope. Deployment pins come only from the reviewed packaged file
   and its SHA256, never from a key file or API reply. Keep `outcome_unknown` blocking until
   `recover_original()` resolves it; never resend, reprice or resign. Never reinitialize a

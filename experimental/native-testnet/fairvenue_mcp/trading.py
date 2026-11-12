@@ -22,11 +22,13 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from fairvenue_schema6 import AgentError, HttpTransport, NativeTestnetClient, ts2
 
 from . import __version__, profile
 from .config import LEGACY_V4_HOME, TS2_SEASON1_HOME, Config, Limits
+from .confirm import ConfirmationPage
 from .journal import Journal
 from .market import (
     SYMBOL,
@@ -58,6 +60,11 @@ _ORDER_ID = re.compile(r"0x[0-9a-f]{64}")
 RECENT_DOWNLOAD_SECONDS = 1_800
 #: The setup page is opened again only after this long without a download.
 REOPEN_PAGE_SECONDS = 600
+#: How long one tool call waits for a click on the browser confirmation page. Like
+#: connect_account's default wait, it stays below the 60 s tool timeout of common clients.
+CONFIRM_WAIT_SECONDS = 45.0
+#: How long an unanswered confirmation page keeps listening, so a later call picks up a late click.
+CONFIRM_PAGE_SECONDS = 600.0
 
 ACCOUNT_NOTE = (
     "get_account shows balances, margin, the position, open orders and recent fills with their "
@@ -69,9 +76,17 @@ TRADING_FORCED_OFF = (
     "Nothing was signed. Only the user can change that setting. dry_run=true previews an order."
 )
 TRADING_NEEDS_CONFIRMATION = (
-    "Trading needs the user's confirmation and this client cannot show the confirmation "
-    "dialog. Nothing was signed. The user can allow it by setting FAIRVENUE_TRADING=on in this "
-    "MCP server's configuration and restarting it. dry_run=true previews an order."
+    "Trading needs the user's confirmation. This client cannot show the confirmation dialog, "
+    "and the confirmation page could not be opened in a browser on this computer "
+    "(FAIRVENUE_OPEN_BROWSER=off or no desktop browser). Nothing was signed. The user can allow "
+    "trading by setting FAIRVENUE_TRADING=on in this MCP server's configuration and restarting "
+    "it, or by using a client that shows MCP dialogs. dry_run=true previews an order."
+)
+TRADING_CONFIRM_IN_BROWSER = (
+    "Nothing was signed. This client did not show the trading dialog, so a confirmation page "
+    "opened in the user's browser, and the user has not answered it yet. Tell the user: "
+    '"Approve trading in the browser page that just opened, then ask me again." The page keeps '
+    "waiting for 10 minutes. Call the same tool again once the user says they approved."
 )
 TRADING_DECLINED = "The user did not allow trading. Nothing was signed."
 PENDING_GUIDANCE = (
@@ -167,12 +182,14 @@ def default_opener(
 
 
 def open_in_browser(url: str) -> bool:
-    """Open an https page in the user's desktop browser and report whether it was tried.
+    """Open a page in the user's desktop browser and report whether it was tried.
 
-    Only desktop openers are used, never a console browser: this server's stdin
-    and stdout carry the MCP protocol. The URL is one argument, never a shell string.
+    Only https pages and this server's own loopback confirmation page. Only desktop
+    openers are used, never a console browser: this server's stdin and stdout carry
+    the MCP protocol. The URL is one argument, never a shell string.
     """
-    if not url.startswith("https://"):
+    loopback = url.startswith("http://") and urlsplit(url).hostname == "127.0.0.1"
+    if not url.startswith("https://") and not loopback:
         return False
     if sys.platform == "darwin":
         opener: str | None = "/usr/bin/open"
@@ -402,10 +419,12 @@ class Trader:
         self._consent: Limits | None = None
         self._paused = False
         self._page_opened_at: float | None = None
+        self._confirmation: ConfirmationPage | None = None
 
     # Shared helpers ---------------------------------------------------------------
 
     def close(self) -> None:
+        self.discard_browser_confirmation()
         if self._client is not None:
             try:
                 self._client.close()
@@ -524,14 +543,65 @@ class Trader:
         """Record the user's confirmation from the dialog, for this server session only."""
         if self.config.trading_mode == "off":
             raise ToolProblem(TRADING_FORCED_OFF)
+        self.discard_browser_confirmation()
         self._consent, self._paused = limits, False
         self._journal("trading_confirmed", {"limits": self.limits_view()})
         return self.limits_view()
 
     def pause_trading(self) -> dict[str, Any]:
+        self.discard_browser_confirmation()
         self._consent, self._paused = None, True
         self._journal("trading_paused", {})
         return {"status": "paused", **self.limits_view()}
+
+    def consent_question(self) -> str:
+        """What the dialog and the browser confirmation page ask, with the default limits."""
+        limits = self.config.limits
+        return (
+            "Allow this agent to sign orders and account settings on the FairVenue TESTNET for "
+            "this session? Mock USDC only, no real funds. Each order: at most "
+            f"{fmt(limits.max_order_quantity)} BTC and {fmt(limits.max_order_notional)} test "
+            f"USDC, priced within {fmt(limits.max_price_deviation_bps / 100)}% of the market. "
+            "Market orders stay within that distance too."
+        )
+
+    async def confirm_in_browser(self) -> None:
+        """Ask on a one-shot loopback page when the client cannot show the dialog.
+
+        Returns once the user clicked Allow, with trading confirmed at the default
+        limits. Raises ToolProblem on Deny, when no browser can be opened, or when
+        nobody clicked within CONFIRM_WAIT_SECONDS. An unanswered page keeps
+        listening, so a later call picks up a late click.
+
+        The page URL carries the secret token and goes only to the browser opener.
+        It is never returned, logged or journaled, not even when FAIRVENUE_OPEN_BROWSER
+        is off: a model that read it could approve trading by itself with a shell or
+        fetch tool, and a browser on another machine cannot reach 127.0.0.1 anyway.
+        """
+        page = self._confirmation
+        if page is None or (
+            page.decision is None and page.expires_at < time.monotonic() + CONFIRM_WAIT_SECONDS
+        ):
+            self.discard_browser_confirmation()
+            page = ConfirmationPage(self.consent_question(), lifetime=CONFIRM_PAGE_SECONDS)
+            self._confirmation = page
+        if page.decision is None:
+            # Shown again on every call that waits, in case the user closed the tab.
+            if not self._browser(page.url):
+                self.discard_browser_confirmation()
+                raise ToolProblem(TRADING_NEEDS_CONFIRMATION)
+            if await page.wait(CONFIRM_WAIT_SECONDS) is None:
+                raise ToolProblem(TRADING_CONFIRM_IN_BROWSER)
+        if page.decision != "allow":
+            self.discard_browser_confirmation()
+            raise ToolProblem(TRADING_DECLINED)
+        self.grant_consent(self.config.limits)
+
+    def discard_browser_confirmation(self) -> None:
+        """Forget the browser confirmation page and stop its listener."""
+        if self._confirmation is not None:
+            self._confirmation.close()
+            self._confirmation = None
 
     def _require_trading(self) -> None:
         state = self.trading_state()
