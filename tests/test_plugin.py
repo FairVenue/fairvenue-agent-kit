@@ -92,10 +92,10 @@ def test_hackathon_facts_match_between_skill_and_server() -> None:
     guide = (NATIVE / "fairvenue_mcp/guide.py").read_text().replace("\\\n", "")
     guide = " ".join(guide.split())
     for fact in (
-        "November 16, 17 and 18, 2026 (UTC). Each day is scored separately, and the rankings "
+        "November 26, 27 and 28, 2026 (UTC). Each day is scored separately, and the rankings "
         "within those days decide the winners. Only trading on those days is ranked.",
         "the account that traded more before the scoring days ranks higher.",
-        "Submissions close Nov 18, 2026, 23:59 UTC.",
+        "Submissions close Nov 28, 2026, 23:59 UTC.",
         "Requires PnL > 0 and Sharpe > 1.",
         "Requires Sharpe > 2.",
         "$1,005 in total, paid in crypto",

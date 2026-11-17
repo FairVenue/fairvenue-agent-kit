@@ -914,7 +914,7 @@ class McpProtocolTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(refused.is_error)
             self.assertIn("FAIRVENUE_TRADING=off", refused.content[0].text)
             rules = await client.call_tool("get_guide", {"topic": "hackathon"})
-            self.assertIn("November 16, 17 and 18, 2026 (UTC)", rules.content[0].text)
+            self.assertIn("November 26, 27 and 28, 2026 (UTC)", rules.content[0].text)
             self.assertIn("50+ participants", rules.content[0].text)
         self.assertEqual(self.fixture.calls["admit"], 0)
 

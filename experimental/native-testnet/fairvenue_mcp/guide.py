@@ -201,12 +201,12 @@ Rules:
 - API trades only. Only trades signed with a bot key from "Create API key & download JSON" \
 count toward trading prizes. Trades placed in the browser terminal don't. Create a fresh bot \
 key when you join. Trades sent through this MCP server use that bot key, so they count.
-- Scoring days: November 16, 17 and 18, 2026 (UTC). Each day is scored separately, and the \
+- Scoring days: November 26, 27 and 28, 2026 (UTC). Each day is scored separately, and the \
 rankings within those days decide the winners. Only trading on those days is ranked.
 - Ties: if accounts tie, the account that traded more before the scoring days ranks higher.
 - One trading prize per account. The testnet contribution prize can be won in addition.
 - Testnet contribution: open a GitHub issue in FairVenue/fairvenue-agent-kit with a title \
-starting [Hackathon bug] or [Hackathon analysis]. Submissions close Nov 18, 2026, 23:59 UTC. \
+starting [Hackathon bug] or [Hackathon analysis]. Submissions close Nov 28, 2026, 23:59 UTC. \
 Report security-sensitive bugs privately to security@fairvenue.xyz, never in a public issue.
 - Winners are announced on the Hackathon tab after the competition, by public testnet owner \
 address, never an internal account ID. Winners aren't contacted by email.
@@ -226,7 +226,7 @@ own key.
 
 Before the scoring days: the testnet now runs TS2 season 2. Bot keys from earlier seasons no \
 longer sign, so every bot needs a new key from Create API key & download JSON. Test it on the \
-testnet before November 16.""",
+testnet before November 26.""",
     "bot": """\
 For trading around the clock, graduate from chat to a standalone bot with the same SDK:
 
@@ -315,7 +315,7 @@ def hackathon_prompt() -> str:
     return (
         "Help me prepare for the FairVenue Bot Building Hackathon. Read get_guide('hackathon') "
         "and setup_status. Check that my trades will count (a new season 2 API key, not the "
-        "browser terminal). Then propose a plan for the scoring days, November 16, 17 and 18, "
+        "browser terminal). Then propose a plan for the scoring days, November 26, 27 and 28, "
         "2026 (UTC): which prize to target, a strategy that can keep PnL above zero with a "
         "qualifying Sharpe ratio, a standalone bot that covers every UTC hour of each scoring "
         "day, and risk limits."

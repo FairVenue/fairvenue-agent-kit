@@ -578,7 +578,7 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
 
     @server.prompt(title="Hackathon plan")
     def hackathon_plan() -> str:
-        """Check eligibility and plan the November 16 to 18 scoring days."""
+        """Check eligibility and plan the November 26 to 28 scoring days."""
         return guide.hackathon_prompt()
 
     return server
