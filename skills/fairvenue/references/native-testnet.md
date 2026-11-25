@@ -208,5 +208,19 @@ outside the best bid and ask for a while. `native_book_history` is a midpoint se
 or Google cookies and bearer tokens for native bots. This client has no funding, withdrawal or
 wallet signer.
 
+Matching and margin rules:
+- The service LP replaces its whole ladder periodically around the mark. Taken levels are not
+  refilled between refreshes.
+- Self-trade prevention cancels the incoming order when its next match would be your own resting
+  order. Fills at better prices before that point stand.
+- A reduce-only order larger than the position is refused, not clipped. Several reduce-only
+  orders may each cover the full position, but fills never exceed it and the rest are canceled
+  once it is flat.
+- An order reserves max(limit, mark) × size / leverage, fixed at admission. Raising leverage
+  does not lower that reserve, so cancel and place again. Locked position margin is size × mark /
+  leverage, refreshed when the account changes.
+- FIXED fee mode charges a rate on every fill. PNL mode charges only on the fill that closes a
+  profitable position and nothing on a losing round trip. Fees round down to 6 decimals.
+
 Continue the shared skill's Progress continuity workflow after setup, without duplicate jobs or
 claiming that a dry run authorizes trading, funding or release.

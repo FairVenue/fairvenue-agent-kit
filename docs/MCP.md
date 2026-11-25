@@ -429,6 +429,10 @@ Read tools carry `readOnlyHint` (`get_account` too: it changes nothing). Signing
   often show only the reference LP's 5-level wall.
 - The mark is the oracle's reference price, not the book mid. The LP re-quotes on its own
   schedule, so the mark can sit outside the best bid and ask for a while.
+- Self-trade prevention cancels your incoming order when its next match would be your own
+  resting order. A reduce-only order larger than the position is refused, not clipped.
+- Raising leverage does not lower the margin held by resting orders. Cancel and place them again.
+- PNL fee mode charges only on the fill that closes a profitable position.
 - Public reads and signed calls share global rate limits with every participant: about 600
   signed reads a minute, 120 commands a minute in total, and 60 orders and account settings a
   minute per account. Public market reads are served from a short shared cache. Each order costs
