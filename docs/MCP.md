@@ -333,7 +333,7 @@ resources at `fairvenue://guide/overview`, `setup`, `trading`, `recovery`, `hack
 
 | Status | Meaning |
 | --- | --- |
-| `accepted` | The exchange journaled it. That is not a fill: an IOC or FOK order that cannot fill ends `canceled` with 0 fills. An order then waits for FairLag, usually over by the time this returns. Orders carry their `order_id`. |
+| `accepted` | The exchange journaled it. That is not a fill: an IOC or FOK order that cannot fill ends `canceled` with 0 fills. A MARKET or IOC order larger than the book fills what is there and cancels the rest. An order then waits for FairLag, usually over by the time this returns. Orders carry their `order_id`. |
 | `rejected` | The exchange refused it. Nothing executed. |
 | `not_placed` | Nothing was placed, with a `reason`: `rejected`, `invalid_request`, `admission_closed` (with the reason in plain words) or `rate_limited`. A new request is safe. A refused leverage or fee-mode change explains the position and orders rule. |
 | `not_executed` | Its batch was voided. Nothing happened. |
@@ -424,7 +424,7 @@ Read tools carry `readOnlyHint` (`get_account` too: it changes nothing). Signing
 - Season 2 proves fills only. A cancel, `cancel_all_orders` or dead man's switch is enforced by
   the operator's matching engine, not by the proof.
 - `get_account` shows the latest 64 orders and fills. FairLag-held orders are counted, never
-  shown.
+  shown. Older rows cannot be paged yet.
 - `get_market` depth (up to 20 levels per side) is a capacity, not a level count. Live books
   often show only the reference LP's 5-level wall.
 - The mark is the oracle's reference price, not the book mid. The LP re-quotes on its own

@@ -125,7 +125,8 @@ nonce from that read and signs an expiry `lifetime_ms` ahead, never past the key
 returns the signed context (fee mode, leverage, admission) and the strict view: wallet balance,
 reserved and locked margin, realized PnL, funding paid, the position and its entry price, the
 latest 64 orders and fills as exact decimal strings with each fill's settlement state, the book
-and the mark. FairLag-held orders show no side, price or size. It is soft, operator-trusted
+and the mark. `history` gives the full counts. Older rows cannot be paged yet, so keep your own
+log of fills. FairLag-held orders show no side, price or size. It is soft, operator-trusted
 state.
 
 Actions keep their shape:
@@ -165,7 +166,8 @@ Use these only with separately authorized scope. Read the reviewed package proto
 inventing a Binance-shaped action. An ACK is the operator journal's soft answer, not a fill, SP1
 proof or L1 finality. Matching follows after FairLag. `accepted` means journaled, not filled: an
 IOC or FOK order that cannot fill ends `canceled` with 0 fills, and the FairLag hold is usually
-over by the time admit returns. Check actual fills and their settlement with `account()`. TS2
+over by the time admit returns. A MARKET or IOC order larger than the book fills what is there
+and cancels the rest, so compare `filled` with the size you asked for. Check actual fills and their settlement with `account()`. TS2
 admits into the open batch continuously while earlier batches settle, but admission can still
 close for a while (reported as `admission_closed`). Do not loosen expiry or FairLag to make a
 request pass.
