@@ -126,6 +126,8 @@ the public grant and `next_nonce`. `run({"nonce": snapshot["next_nonce"], "expir
 Those bytes, the order id and the request digest match the shared TS2 JS and Rust vectors.
 `submit(action, lifetime_ms=...)` is `run` with one signed context read: it takes the nonce from
 that read and an expiry `lifetime_ms` ahead (23 hours at most), never past the key's expiry.
+Use at least 10 seconds. Admission takes about 1 to 3 seconds and then FairLag, so a shorter
+lifetime is refused or expires before the order rests.
 
 - `place` keeps its order shape: `symbol`, `side`, `order_type`, `time_in_force`, `price`,
   `quantity`, `reduce_only` and `post_only`. Price and quantity must be whole ticks and lots of the
@@ -202,7 +204,7 @@ another order, invent a replacement, expire or delete the original. An advanced 
 balance, new batch or your own clock is not evidence. Only the server's answer is. If the original
 never reached the server, the lookup answers `unresolved` until its own expiry has passed, so new
 signing waits that long (30 seconds for one-shot orders and account commands, the order's
-lifetime for `GTC`).
+lifetime for `GTC`). Keep `GTC` lifetimes as short as the strategy allows and place again.
 
 `run()` itself also clears the original when the server answers a definitive `not_placed`
 refusal bound to that exact request (HTTP 409, or 429 for `rate_limited`, refused before any

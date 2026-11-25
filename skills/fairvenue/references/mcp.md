@@ -20,7 +20,7 @@ before new tools appear.
 - **Other clients** (Cursor, VS Code, Claude Desktop): a stdio server with command `uvx` and
   arguments
   `--from "fairvenue-schema6-agent[mcp] @ git+https://github.com/FairVenue/fairvenue-agent-kit@main#subdirectory=experimental/native-testnet" fairvenue-mcp`.
-  Update: run it once with `--refresh` and `--version` added. It prints `fairvenue-mcp 0.4.3`.
+  Update: run it once with `--refresh` and `--version` added. It prints `fairvenue-mcp 0.4.4`.
 
 Version 0.4.0 or later is needed for TS2 season 2, and 0.4.2 for the trading switch file. These
 commands follow `main`. For anything the user relies on, pin a reviewed commit

@@ -189,14 +189,17 @@ nonce is not evidence. Never reset, reprice, retime, resign or resend the origin
 or process needs a dedicated key and custody. If a request was retained but never reached the
 server, the lookup answers `unresolved` until that request's own expiry has passed, so new
 signing waits that long (30 seconds for one-shot orders and account commands, the order's
-lifetime for `GTC`).
+lifetime for `GTC`). So keep `GTC` lifetimes as short as the strategy allows, a few minutes for
+example, and place again. Use at least 10 seconds: admission takes about 1 to 3 seconds and then
+FairLag, so a shorter lifetime is refused or expires before the order rests.
 
 Bot routes are `/v1/agent/context`, `/prepare`, `/admit` and `/recovery`, and the signed account
 read `/v1/ts2/agent/read`, under the fixed approved origin. Public reads use `/api/v1/info` with
 `{"type":"native_market"}`. Its SOFT book and reference
 prices are not chain freshness, proof or external liquidity. Book depth 20 is a capacity, not a
-level count: live books often show only the reference LP's 5-level wall. `native_book_history` is
-a midpoint series, not L2 depth. Do not use V0 WebSockets, market_id0
+level count: live books often show only the reference LP's 5-level wall. The mark is the oracle's
+reference price, not the book mid. The LP re-quotes on its own schedule, so the mark can sit
+outside the best bid and ask for a while. `native_book_history` is a midpoint series, not L2 depth. Do not use V0 WebSockets, market_id0
 or Google cookies and bearer tokens for native bots. This client has no funding, withdrawal or
 wallet signer.
 

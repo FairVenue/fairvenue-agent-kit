@@ -13,6 +13,12 @@ exact-original recovery rules, and it only talks to the approved HTTPS origin fr
 pins. This is an operator-run Arbitrum Sepolia TESTNET with mock USDC. It handles no real funds,
 does not connect to mainnet and never routes an order to another venue.
 
+## What's new in 0.4.4
+
+**A GTC order rests 1 hour by default, not 23.** A request that was stored but never reached
+the server blocks signing until its own expiry, so a long default could block you for most of a
+day. Set `FAIRVENUE_GTC_LIFETIME_MINUTES` for longer.
+
 ## What's new in 0.4.3
 
 **A safer dead man's switch.** `set_dead_man_switch` now arms at least 30 seconds ahead, above
@@ -72,7 +78,7 @@ Season 2 is a fresh deployment, so everyone updates once and creates one new key
      and `codex plugin add fairvenue@fairvenue`, and restart Codex.
    - Cursor, VS Code, Claude Desktop and other `uvx` setups: run the server command once with
      `--refresh`, for example `uvx --refresh --from "fairvenue-schema6-agent[mcp] @ git+https://github.com/FairVenue/fairvenue-agent-kit@main#subdirectory=experimental/native-testnet" fairvenue-mcp --version`.
-     It prints `fairvenue-mcp 0.4.3`. Then restart the client.
+     It prints `fairvenue-mcp 0.4.4`. Then restart the client.
 2. **Create a new key.** Ask your agent *"Connect me to the FairVenue TESTNET"*.
    `connect_account` opens the key page. Sign in with Google and click
    **Create API key & download JSON**. Your account gets 1,000 test USDC once in season 2, right
@@ -309,7 +315,7 @@ resources at `fairvenue://guide/overview`, `setup`, `trading`, `recovery`, `hack
 
 ### Orders
 
-- **LIMIT** needs a `price` on the tick. `time_in_force` GTC rests (23 hours by default,
+- **LIMIT** needs a `price` on the tick. `time_in_force` GTC rests (1 hour by default,
   `FAIRVENUE_GTC_LIFETIME_MINUTES`), IOC fills what it can now, FOK fills completely or not at
   all. `post_only` needs GTC.
 - **MARKET** takes no price. It is IOC (default) or FOK and signs a worst price
@@ -357,7 +363,7 @@ Read tools carry `readOnlyHint` (`get_account` too: it changes nothing). Signing
 | `FAIRVENUE_MAX_ORDER_QUANTITY` | `0.01` | Default largest order in BTC. The dialog can change it for the session. |
 | `FAIRVENUE_MAX_ORDER_NOTIONAL` | `1000` | Default largest price times size in test USDC. |
 | `FAIRVENUE_MAX_PRICE_DEVIATION_BPS` | `500` | Refuse prices, and MARKET worst prices, further than this from the midpoint (or the mark when one side is empty). It also caps `max_slippage_bps`. |
-| `FAIRVENUE_GTC_LIFETIME_MINUTES` | `1380` (23 hours) | How long a GTC order rests unless cancelled or filled. 1 to 1380. |
+| `FAIRVENUE_GTC_LIFETIME_MINUTES` | `60` (1 hour) | How long a GTC order rests unless cancelled or filled. 1 to 1380. A lost request blocks signing for up to this long, so keep it short. |
 | `FAIRVENUE_HOME` | `~/.fairvenue/ts2-season2` | Private profile directory (0700). Never point it at an old V4 or season 1 profile. |
 | `FAIRVENUE_KEY_FILE` | active imported key | Always use this TS2 key file. It overrides `import_agent_key`. |
 | `FAIRVENUE_INSTALLATION_FILE` | `$FAIRVENUE_HOME/installation.json` | Installed deployment pins. |
@@ -421,6 +427,8 @@ Read tools carry `readOnlyHint` (`get_account` too: it changes nothing). Signing
   shown.
 - `get_market` depth (up to 20 levels per side) is a capacity, not a level count. Live books
   often show only the reference LP's 5-level wall.
+- The mark is the oracle's reference price, not the book mid. The LP re-quotes on its own
+  schedule, so the mark can sit outside the best bid and ask for a while.
 - Public reads and signed calls share global rate limits with every participant: about 600
   signed reads a minute, 120 commands a minute in total, and 60 orders and account settings a
   minute per account. Public market reads are served from a short shared cache. Each order costs

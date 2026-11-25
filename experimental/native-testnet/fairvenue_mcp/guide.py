@@ -130,7 +130,7 @@ orders, FairLag-held orders and recent fills with their settlement state.
 LIMIT needs a price in test USDC that is a whole number of ticks. The quantity must be a whole \
 number of steps (tick_size and step_size in get_market). Off-grid input is refused, never \
 rounded. time_in_force is GTC (rests, optionally post_only), IOC (fills what it can now and \
-cancels the rest) or FOK (fills completely or not at all). A GTC order rests 23 hours by \
+cancels the rest) or FOK (fills completely or not at all). A GTC order rests 1 hour by \
 default (FAIRVENUE_GTC_LIFETIME_MINUTES), never past the key's expiry.
 - order_type MARKET takes no price. It is IOC (default) or FOK and signs a worst price \
 max_slippage_bps beyond the best opposite price, or beyond the mark when that side is empty. \
@@ -180,7 +180,7 @@ still_unknown mean check again later. nothing_pending means nothing is waiting.
 
 If a request was stored but never reached the server, its lookup stays unresolved until the \
 request's own expiry has passed: 30 seconds for IOC, FOK, MARKET and account commands, the \
-GTC lifetime (23 hours by default) for a resting order. Signing waits until then. Keep calling \
+GTC lifetime (1 hour by default) for a resting order. Signing waits until then. Keep calling \
 recover_pending_request.
 
 Never reprice, resign, resend or delete a pending original. Elapsed time or a new batch are not \

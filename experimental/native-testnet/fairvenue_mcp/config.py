@@ -36,8 +36,7 @@ DEFAULT_DOWNLOAD_DIRS = ("~/Downloads",)
 DEFAULT_MAX_ORDER_QUANTITY = Decimal("0.01")
 DEFAULT_MAX_ORDER_NOTIONAL = Decimal("1000")
 DEFAULT_MAX_PRICE_DEVIATION_BPS = Decimal("500")
-#: Browser parity: a resting (GTC) order lives 23 hours. The server allows 24.
-DEFAULT_GTC_LIFETIME_MINUTES = 23 * 60
+DEFAULT_GTC_LIFETIME_MINUTES = 60
 MAX_GTC_LIFETIME_MINUTES = 23 * 60
 
 _ON = {"1", "true", "yes", "on", "enabled"}

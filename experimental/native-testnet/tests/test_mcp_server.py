@@ -263,9 +263,9 @@ class McpTraderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             (action["kind"], action["time_in_force"], action["post_only"]), (0, 0, True)
         )
-        # A GTC order rests for 23 hours, never past the key.
         lifetime = int(action["expires_at_ms"]) - int(time.time() * 1000)
-        self.assertGreater(lifetime, 22 * 3_600_000)
+        self.assertGreater(lifetime, 59 * 60_000)
+        self.assertLessEqual(lifetime, 60 * 60_000)
         _, order_id = ts2.signing_message(
             ts2.PINS,
             signed["account_key"],
@@ -1509,8 +1509,7 @@ class McpConfigAndMarketTests(unittest.TestCase):
         self.assertEqual(load_config({"FAIRVENUE_TRADING": "off"}).trading_mode, "off")
         self.assertEqual(load_config({"FAIRVENUE_TRADING": "ask"}).trading_mode, "ask")
         self.assertEqual(str(config.limits.max_order_notional), "1000")
-        # GTC orders keep resting 23 hours by default. Shorter is a choice.
-        self.assertEqual(config.gtc_lifetime_ms, 23 * 3_600_000)
+        self.assertEqual(config.gtc_lifetime_ms, 3_600_000)
         shorter = load_config({"FAIRVENUE_GTC_LIFETIME_MINUTES": "90"})
         self.assertEqual(shorter.gtc_lifetime_ms, 90 * 60_000)
         for name, value in (
