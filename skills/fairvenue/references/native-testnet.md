@@ -127,7 +127,9 @@ reserved and locked margin, realized PnL, funding paid, the position and its ent
 latest 64 orders and fills as exact decimal strings with each fill's settlement state, the book
 and the mark. `history` gives the full counts. Older rows cannot be paged yet, so keep your own
 log of fills. FairLag-held orders show no side, price or size. It is soft, operator-trusted
-state.
+state. The context's `batch_number` is the open soft batch, so the settled batch on chain
+usually lags it. `settled.finalized_at_block` stays `null` until the settlement's block is
+final, which can take minutes after its transaction.
 
 Actions keep their shape:
 
@@ -140,8 +142,9 @@ Actions keep their shape:
   rounded away from the book, or with `price` `None` a bound `max_slippage_bps` (an int from 1 to
   1000, default 50, the browser's 0.5%) beyond the best opposite price, or beyond the mark when
   that side is empty. `expiresAtMs` is the order's lifetime: up to 23 hours for `GTC`, about 30
-  seconds for one-shot orders, never past the key's expiry. Every order carries the account's fee
-  mode.
+  seconds for one-shot orders, never past the key's expiry. The server refuses an `IOC`, `FOK` or
+  `MARKET` order that expires more than 60 seconds after admission, with a plain `rejected`.
+  Every order carries the account's fee mode.
 - `cancel` with the 0x `order_id` from the order's ACK (`result["ack"]["order_id"]`). Cancel
   only orders that `account()` still shows open.
 - `kill_all` cancels every resting and FairLag-held order of the account at once.
