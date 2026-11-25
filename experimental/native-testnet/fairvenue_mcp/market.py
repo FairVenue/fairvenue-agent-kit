@@ -113,6 +113,7 @@ class Trade:
     taker_side: str
     time_ms: int
     batch: str | None
+    lineage: str | None
     settlement: Mapping[str, Any]
 
     def view(self) -> dict[str, Any]:
@@ -126,6 +127,8 @@ class Trade:
         }
         if self.batch is not None:
             view["batch"] = self.batch
+        if self.lineage is not None:
+            view["lineage"] = self.lineage
         return view
 
 
@@ -245,6 +248,7 @@ def parse_market(value: Mapping[str, Any], settlement: str) -> Market:
             raise _fail("trade")
         settled = row.get("settlement")
         trade_batch = row.get("batch_number")
+        lineage = row.get("lineage")
         trades.append(
             Trade(
                 trade_id=str(uint(row.get("trade_id"), what="trade id")),
@@ -253,6 +257,7 @@ def parse_market(value: Mapping[str, Any], settlement: str) -> Market:
                 taker_side=row["side"],
                 time_ms=uint(row.get("timestamp_ms"), what="trade time"),
                 batch=str(uint(trade_batch, what="trade batch")) if trade_batch else None,
+                lineage=None if lineage is None else str(uint(lineage, what="trade lineage")),
                 settlement=settled if isinstance(settled, dict) else {},
             )
         )

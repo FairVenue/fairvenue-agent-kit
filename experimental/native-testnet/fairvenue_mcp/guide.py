@@ -44,9 +44,10 @@ closes all or part of the position with a reduce-only MARKET order. Prices and s
 decimal strings that must fit the tick and step sizes from get_market exactly. Nothing is \
 rounded. There is no order modify: cancel and place a new order.
 - "accepted" means the exchange journaled the command in soft, operator-trusted state. It is \
-not a fill report, a proof or L1 finality. An accepted order comes with its order_id. Season 2 \
-proves fills only. Cancels, cancel-all and the dead man's switch are enforced by the operator's \
-matching engine, not by the proof.
+not a fill report, a proof or L1 finality. An IOC or FOK order that cannot fill is still \
+accepted and then ends canceled with 0 fills, so check get_account. An accepted order comes \
+with its order_id. Season 2 proves fills only. Cancels, cancel-all and the dead man's switch \
+are enforced by the operator's matching engine, not by the proof.
 - "not_placed", "not_executed" and "failed" mean nothing happened, so a new request is safe. \
 not_placed with reason admission_closed means trading is paused, and the result says why in \
 plain words. "outcome_unknown" means call recover_pending_request and never send the same \
@@ -54,9 +55,8 @@ order again until it resolves. "blocked" means some key still has such a request
 first.
 - Public reads and signed calls share global rate limits with every participant. Prefer \
 wait_for_market_update to tight polling.
-- Bot Building Hackathon: only trades signed with an API key count. Scoring days are November \
-16, 17 and 18, 2026 (UTC). Prizes need a full day of hourly returns, so a standalone bot \
-usually beats a chat session. See get_guide("hackathon").
+- Bot Building Hackathon: only trades signed with an API key count. Prizes need a full day of \
+hourly returns, so a standalone bot usually beats a chat session. See get_guide("hackathon").
 
 Background: get_guide with topic overview, setup, trading, recovery, hackathon or bot.
 """
@@ -154,7 +154,8 @@ says so.
 - There is no order modify. Cancel the order and place a new one.
 - cancel_all_orders cancels every resting and FairLag-held order of the account at once. \
 set_dead_man_switch keeps a heartbeat deadline: right after it, every working order is \
-cancelled. Refresh it while the agent is active so orders die if the agent stops.
+cancelled. Firing disarms it and a rejected arm protects nothing. Refresh it while the agent is \
+active so orders die if the agent stops.
 - Each order costs three signed calls: one context read, the admission and the exact lookup. \
 get_account costs two signed reads. All participants share a global budget of about 120 \
 commands a minute, with 60 orders and account settings a minute per account. Trade \
@@ -187,46 +188,16 @@ evidence of its outcome. Only the server's lookup answer is. While any is pendin
 requests are blocked. A result may carry journal_error: the outcome is still true, only the \
 local journal entry is missing.""",
     "hackathon": f"""\
-Bot Building Hackathon on the FairVenue testnet. Official rules: {RULES_URL} and the Hackathon \
-tab in Arena. If anything here differs, those win.
+Bot Building Hackathon on the FairVenue testnet. Dates, prizes and scoring: {RULES_URL} and \
+the Hackathon tab in Arena.
 
-It runs only with 50+ participants. Prizes, $1,005 in total, paid in crypto:
-- Top taker volume, $250. Requires PnL > 0 and Sharpe > 1.
-- Top maker volume, $250. Requires PnL > 0 and Sharpe > 1.
-- Top PnL, $250. Requires Sharpe > 2.
-- Testnet contribution, $255, judged by the FairVenue team: the most valuable bug report or \
-testnet analysis.
-
-Rules:
-- API trades only. Only trades signed with a bot key from "Create API key & download JSON" \
-count toward trading prizes. Trades placed in the browser terminal don't. Create a fresh bot \
-key when you join. Trades sent through this MCP server use that bot key, so they count.
-- Scoring days: November 26, 27 and 28, 2026 (UTC). Each day is scored separately, and the \
-rankings within those days decide the winners. Only trading on those days is ranked.
-- Ties: if accounts tie, the account that traded more before the scoring days ranks higher.
-- One trading prize per account. The testnet contribution prize can be won in addition.
-- Testnet contribution: open a GitHub issue in FairVenue/fairvenue-agent-kit with a title \
-starting [Hackathon bug] or [Hackathon analysis]. Submissions close Nov 28, 2026, 23:59 UTC. \
-Report security-sensitive bugs privately to security@fairvenue.xyz, never in a public issue.
-- Winners are announced on the Hackathon tab after the competition, by public testnet owner \
-address, never an internal account ID. Winners aren't contacted by email.
-- Testnet tokens have no monetary value.
-
-How each scoring day is measured:
-- PnL: change in account equity during one scoring day (UTC), excluding deposits and top-ups.
-- Volume: filled notional during one scoring day (UTC). Taker volume counts orders that took \
-liquidity. Maker volume counts resting orders that were filled.
-- Sharpe ratio: annualized Sharpe of the account's hourly returns during one scoring day, their \
-mean divided by their standard deviation, multiplied by √8760, with no risk-free rate. An \
-account needs that day's 24 hourly returns with non-zero variance to qualify on that day.
-
-For a prize, run a standalone bot: a chat session rarely covers all 24 hours of a scoring day. \
-Use this server to explore, test and build that bot (get_guide("bot")), then give the bot its \
-own key.
-
-Before the scoring days: the testnet now runs TS2 season 2. Bot keys from earlier seasons no \
-longer sign, so every bot needs a new key from Create API key & download JSON. Test it on the \
-testnet before November 26.""",
+- Only trades signed with a bot key from "Create API key & download JSON" count. Trades sent \
+through this MCP server use that key. Browser terminal trades don't count.
+- Scoring uses hourly returns over full UTC days, so run a standalone bot (get_guide("bot")), \
+not a chat session.
+- Keys from earlier seasons no longer sign. Create a new key and test it before scoring starts.
+- Bug reports and testnet analysis: a GitHub issue in FairVenue/fairvenue-agent-kit titled \
+[Hackathon bug] or [Hackathon analysis]. Send security-sensitive bugs to security@fairvenue.xyz.""",
     "bot": """\
 For trading around the clock, graduate from chat to a standalone bot with the same SDK:
 
@@ -257,7 +228,8 @@ modify raises unsupported: cancel and place a new order.
 - Give the bot its own key and continuity directory. Never share one key between processes.
 - On startup call recover_original() if has_pending_request() is true, before anything else.
 - Read public market data with POST /api/v1/info {"type": "native_market"} and pace reads.
-- Keep a dead man's switch heartbeat and cancel or let it expire on shutdown.
+- Keep a dead man's switch heartbeat and cancel or let it expire on shutdown. Set deadline_ms \
+at least 30 seconds ahead of the current time. Firing disarms it.
 - Start with a no-order dry run, then agree on size and price limits with the user.""",
 }
 
@@ -315,8 +287,8 @@ def hackathon_prompt() -> str:
     return (
         "Help me prepare for the FairVenue Bot Building Hackathon. Read get_guide('hackathon') "
         "and setup_status. Check that my trades will count (a new season 2 API key, not the "
-        "browser terminal). Then propose a plan for the scoring days, November 26, 27 and 28, "
-        "2026 (UTC): which prize to target, a strategy that can keep PnL above zero with a "
+        "browser terminal). Then propose a plan for the scoring days in the official rules: "
+        "which prize to target, a strategy that can keep PnL above zero with a "
         "qualifying Sharpe ratio, a standalone bot that covers every UTC hour of each scoring "
         "day, and risk limits."
     )

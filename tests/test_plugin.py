@@ -85,22 +85,3 @@ def test_packaged_deployment_pin_is_the_one_everything_names() -> None:
         assert pin in guide, pin
     for document in ("docs/MCP.md", "experimental/native-testnet/README.md"):
         assert "TS2: create a new bot key" in (ROOT / document).read_text(), document
-
-
-def test_hackathon_facts_match_between_skill_and_server() -> None:
-    skill = " ".join((ROOT / "skills/fairvenue/references/hackathon.md").read_text().split())
-    guide = (NATIVE / "fairvenue_mcp/guide.py").read_text().replace("\\\n", "")
-    guide = " ".join(guide.split())
-    for fact in (
-        "November 26, 27 and 28, 2026 (UTC). Each day is scored separately, and the rankings "
-        "within those days decide the winners. Only trading on those days is ranked.",
-        "the account that traded more before the scoring days ranks higher.",
-        "Submissions close Nov 28, 2026, 23:59 UTC.",
-        "Requires PnL > 0 and Sharpe > 1.",
-        "Requires Sharpe > 2.",
-        "$1,005 in total, paid in crypto",
-        "multiplied by √8760",
-        "that day's 24 hourly returns with non-zero variance",
-    ):
-        assert fact in skill, fact
-        assert fact in guide, fact

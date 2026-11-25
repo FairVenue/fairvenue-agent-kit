@@ -139,12 +139,17 @@ that read and an expiry `lifetime_ms` ahead (23 hours at most), never past the k
   key's expiry. Every order carries the account's fee mode and a fresh random client nonce.
 - `cancel` takes the 0x `order_id` from the order's ACK (`result["ack"]["order_id"]`).
 - `kill_all` cancels every resting and FairLag-held order of the account at once.
-- `fee_mode`, `leverage` (`"1"` to `"100"`) and `dead_man_switch` are account commands with one
-  strictly increasing command nonce per account and key. `next_nonce` is that nonce and never
-  falls below one this key already signed. The fee mode changes only with no position and no
+- `{"type": "fee_mode", "mode": "PNL"}` (or `"FIXED"`), `{"type": "leverage", "leverage": "5"}`
+  (`"1"` to `"100"`) and `{"type": "dead_man_switch", "deadline_ms": "..."}` are account commands
+  with one strictly increasing command nonce per account and key. `next_nonce` is that nonce and
+  never falls below one this key already signed. The fee mode changes only with no position and no
   working orders. Leverage can rise at any time and fall only with no position and no working
   orders. The operator can keep fee mode and leverage closed. Then they raise `admission_closed`
   before anything is signed.
+- The dead man's switch fires once the operator's clock passes `deadline_ms` and cancels every
+  working order, including orders placed after arming. Firing disarms it, so re-arm it as a
+  heartbeat. Base the deadline on your wall clock, at least 30 seconds ahead, never on
+  `protocol_time_ms`, which can lag. A rejected arm protects nothing.
 - `modify` raises `unsupported`. Cancel the order and place a new one.
 
 While the signed context shows admission closed, `run` and `submit` sign only cancels, kill-all

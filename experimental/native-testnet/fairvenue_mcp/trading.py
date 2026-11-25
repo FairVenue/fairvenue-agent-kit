@@ -57,7 +57,7 @@ from .public import PublicApi, PublicApiError
 #: Browser parity: an IOC, FOK or MARKET order and an account command live 30
 #: seconds, never past the key's own expiry. A GTC order's lifetime is configured.
 ONE_SHOT_LIFETIME_MS = 30_000
-MIN_DMS_DELAY_MS = 2_000
+MIN_DMS_DELAY_MS = 30_000
 MAX_DMS_DELAY_MS = 86_000_000
 MAX_LEVERAGE = 100
 DEFAULT_SLIPPAGE_BPS = ts2.DEFAULT_SLIPPAGE_BPS
@@ -393,7 +393,14 @@ def account_summary(context: dict[str, Any] | None, view: dict[str, Any]) -> dic
             "final": settled["finalized_at_block"] is not None,
             "wallet_balance": settled["wallet_balance"],
             "position_quantity": settled["position_quantity"],
-            "settlement": settlement_view(settled),
+            "settlement": settlement_view(
+                {
+                    **settled,
+                    "state": "controller_observed_settled_final"
+                    if settled["finalized_at_block"] is not None
+                    else "controller_observed_settled",
+                }
+            ),
         }
     )
     history = view["history"]
@@ -1270,7 +1277,6 @@ class Trader:
             if not seconds:
                 action = {"type": "dead_man_switch", "deadline_ms": "0"}
                 return action, {"dead_man_switch": "disarm"}, ONE_SHOT_LIFETIME_MS
-            # Never behind the server's last protocol time.
             context = client.last_context() or {}
             now = max(int(time.time() * 1000), int(context.get("protocol_time_ms") or 0))
             deadline["ms"] = now + seconds * 1000
@@ -1283,13 +1289,16 @@ class Trader:
             result["deadline"] = utc(deadline["ms"])
             result["effect"] = (
                 "Right after the deadline every resting and FairLag-held order of this account "
-                "is cancelled and the switch disarms. Arming again replaces the deadline. "
-                "Refresh it to keep orders alive."
+                "is cancelled, including orders placed after arming. Then the switch disarms and "
+                "covers no later order until it is armed again. Arming again replaces the "
+                "deadline. Refresh it to keep orders alive."
             )
         elif status == "accepted":
             result["effect"] = "The dead man's switch is disarmed."
         elif status == "outcome_unknown":
             result["effect"] = "The switch may or may not be armed until recovery resolves it."
+        elif seconds:
+            result["effect"] = "No switch change was made. This arm protects nothing."
         else:
             result["effect"] = "No switch change was made."
         return result

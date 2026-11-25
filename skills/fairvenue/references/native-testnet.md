@@ -141,12 +141,19 @@ Actions keep their shape:
   that side is empty. `expiresAtMs` is the order's lifetime: up to 23 hours for `GTC`, about 30
   seconds for one-shot orders, never past the key's expiry. Every order carries the account's fee
   mode.
-- `cancel` with the 0x `order_id` from the order's ACK (`result["ack"]["order_id"]`).
+- `cancel` with the 0x `order_id` from the order's ACK (`result["ack"]["order_id"]`). Cancel
+  only orders that `account()` still shows open.
 - `kill_all` cancels every resting and FairLag-held order of the account at once.
-- `fee_mode` (`FIXED` or `PNL`), `leverage` (`"1"` to `"100"`) and `dead_man_switch` are account
+- `{"type": "fee_mode", "mode": "PNL"}` (or `"FIXED"`), `{"type": "leverage", "leverage": "5"}`
+  (`"1"` to `"100"`) and `{"type": "dead_man_switch", "deadline_ms": "..."}` are account
   commands with one strictly increasing nonce per account and key. The fee mode changes only with
   no position and no working orders. Leverage can fall only with no position and no working
   orders. The operator can keep fee mode and leverage closed (`admission_closed`).
+- The dead man's switch fires once the operator's clock passes `deadline_ms` and cancels every
+  working order, including orders placed after arming. Firing disarms it, so re-arm it as a
+  heartbeat. Base the deadline on your wall clock, at least 30 seconds ahead, never on the
+  context's `protocol_time_ms`, which can lag. Admission can take seconds, and a rejected arm
+  protects nothing.
 - `modify` raises `unsupported`: cancel and place a new order.
 
 While the signed context shows admission closed, `run` and `submit` sign only cancels, kill-all
@@ -156,17 +163,20 @@ says why (for example `funding_owed`, when only cancels work).
 
 Use these only with separately authorized scope. Read the reviewed package protocol rather than
 inventing a Binance-shaped action. An ACK is the operator journal's soft answer, not a fill, SP1
-proof or L1 finality. Matching follows after FairLag. Check actual fills and their settlement
-separately. TS2 admits into the open batch continuously while earlier batches settle, but
-admission can still close for a while (reported as `admission_closed`). Do not loosen expiry or
-FairLag to make a request pass.
+proof or L1 finality. Matching follows after FairLag. `accepted` means journaled, not filled: an
+IOC or FOK order that cannot fill ends `canceled` with 0 fills, and the FairLag hold is usually
+over by the time admit returns. Check actual fills and their settlement with `account()`. TS2
+admits into the open batch continuously while earlier batches settle, but admission can still
+close for a while (reported as `admission_closed`). Do not loosen expiry or FairLag to make a
+request pass.
 
 A failed `run()` has two kinds of error. An `AgentError` whose `code` is a `not_placed` reason is
 definitive: the server refused before any durable effect and the SDK already cleared the retained
 original. Build a fresh request from a new `snapshot()`. The reasons are `rejected` (the exchange
 refused it, for example margin or a post-only order that would cross), `invalid_request` (fix the
 cause first), `rate_limited` (back off, then retry) and `admission_closed` (trading or settings
-paused, retry later). No other code means "not placed".
+paused, retry later). No other code means "not placed". Branch on `error.code`, never on the
+message text.
 
 After `outcome_unknown` (timeout, 5xx or an unverifiable reply), preserve the same private
 continuity database and call `recover_original()`. It performs only `/v1/agent/recovery` with the
@@ -184,7 +194,9 @@ lifetime for `GTC`).
 Bot routes are `/v1/agent/context`, `/prepare`, `/admit` and `/recovery`, and the signed account
 read `/v1/ts2/agent/read`, under the fixed approved origin. Public reads use `/api/v1/info` with
 `{"type":"native_market"}`. Its SOFT book and reference
-prices are not chain freshness, proof or external liquidity. Do not use V0 WebSockets, market_id0
+prices are not chain freshness, proof or external liquidity. Book depth 20 is a capacity, not a
+level count: live books often show only the reference LP's 5-level wall. `native_book_history` is
+a midpoint series, not L2 depth. Do not use V0 WebSockets, market_id0
 or Google cookies and bearer tokens for native bots. This client has no funding, withdrawal or
 wallet signer.
 

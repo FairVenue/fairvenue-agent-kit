@@ -382,6 +382,10 @@ class McpTraderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(soft["settlement"], {"state": "operator_soft"})
         self.assertTrue(settled["settlement"]["settle_tx"].endswith("22" * 32))
         self.assertEqual(account["last_settled_state"]["final"], False)
+        # The signed snapshot has no state field. It must not read as "unknown".
+        self.assertEqual(
+            account["last_settled_state"]["settlement"]["state"], "controller_observed_settled"
+        )
         self.assertEqual((self.fixture.calls["read"], self.fixture.calls["admit"]), (1, 0))
         self.assertNotIn(self.fixture.grant["material"]["account_key"], json.dumps(account))
         # No funded account yet.
@@ -549,6 +553,7 @@ class McpTraderTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_account_commands_use_the_security_command_nonce(self) -> None:
         trader = await self.ready()
+        wall_clock_ms = int(time.time() * 1000)
         armed = await trader.dead_man_switch(seconds=2, purpose="set_dead_man_switch")
         self.assertEqual(armed["status"], "accepted")
         self.assertIn("Right after the deadline", armed["effect"])
@@ -556,9 +561,8 @@ class McpTraderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await trader.fee_mode(mode="pnl"))["status"], "accepted")
         dms, leverage, fee = (request["action"] for request in self.fixture.admitted())
         self.assertEqual((dms["type"], dms["command_nonce"]), ("set_dms", "1"))
-        self.assertGreaterEqual(
-            int(dms["deadline_ms"]), int(self.fixture.context["protocol_time_ms"]) + 2000
-        )
+        # A 2 s request arms the 30 s minimum on the wall clock, above admission latency.
+        self.assertGreaterEqual(int(dms["deadline_ms"]), wall_clock_ms + 30_000)
         self.assertEqual((leverage["leverage"], leverage["command_nonce"]), ("100", "2"))
         self.assertEqual(
             (fee["type"], fee["fee_mode"], fee["command_nonce"]), ("set_fee_mode", 1, "3")
@@ -726,7 +730,7 @@ class McpReviewRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.fixture.refusal = lambda request: (429, not_placed(request, "rate_limited"))
         refused = await trader.dead_man_switch(seconds=2, purpose="set_dead_man_switch")
         self.assertEqual(refused["status"], "not_placed")
-        self.assertEqual(refused["effect"], "No switch change was made.")
+        self.assertEqual(refused["effect"], "No switch change was made. This arm protects nothing.")
         self.assertNotIn("deadline", refused)
         cancel_all = await trader.cancel_all()
         self.assertEqual(cancel_all["effect"], "No order was cancelled.")
@@ -908,14 +912,14 @@ class McpProtocolTests(unittest.IsolatedAsyncioTestCase):
             snapshot = await client.call_tool("get_market", {"depth": 1, "trades": 1})
             self.assertFalse(snapshot.is_error)
             self.assertEqual(snapshot.structured_content["best_bid"]["price"], "79999.9")
+            self.assertEqual(snapshot.structured_content["recent_trades"][0]["lineage"], "1")
             self.assertEqual(snapshot.structured_content["rules"]["tick_size"], "0.1")
             self.assertTrue(snapshot.structured_content["matches_installed_pins"])
             refused = await client.call_tool("place_order", self.order)
             self.assertTrue(refused.is_error)
             self.assertIn("FAIRVENUE_TRADING=off", refused.content[0].text)
             rules = await client.call_tool("get_guide", {"topic": "hackathon"})
-            self.assertIn("November 26, 27 and 28, 2026 (UTC)", rules.content[0].text)
-            self.assertIn("50+ participants", rules.content[0].text)
+            self.assertIn("https://fairvenue.xyz/hackathon/rules", rules.content[0].text)
         self.assertEqual(self.fixture.calls["admit"], 0)
 
     async def test_first_order_asks_once_in_a_dialog_then_trades(self) -> None:

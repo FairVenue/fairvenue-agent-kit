@@ -469,14 +469,17 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
                 ge=0,
                 le=86_000,
                 description="Cancel all resting orders unless refreshed within this many "
-                "seconds (minimum 2). 0 disarms it.",
+                "seconds (minimum 30, shorter values arm 30). 0 disarms it.",
             ),
         ],
         consent: Consent,
     ) -> dict[str, Any]:
         """Arm, refresh or disarm the account's dead man's switch heartbeat.
 
-        Right after the deadline every resting and FairLag-held order is cancelled.
+        Right after the deadline every resting and FairLag-held order is cancelled,
+        including orders placed after arming. Firing disarms it, so re-arm it as a
+        heartbeat. Only an accepted arm protects orders. A rejected or not_placed arm
+        protects nothing.
         """
         await apply_consent(consent)
         return await run(
@@ -578,7 +581,7 @@ def create_server(trader: Trader | None, *, config_error: str | None = None) -> 
 
     @server.prompt(title="Hackathon plan")
     def hackathon_plan() -> str:
-        """Check eligibility and plan the November 26 to 28 scoring days."""
+        """Check eligibility and plan the hackathon scoring days."""
         return guide.hackathon_prompt()
 
     return server

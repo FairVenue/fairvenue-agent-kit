@@ -13,6 +13,14 @@ exact-original recovery rules, and it only talks to the approved HTTPS origin fr
 pins. This is an operator-run Arbitrum Sepolia TESTNET with mock USDC. It handles no real funds,
 does not connect to mainnet and never routes an order to another venue.
 
+## What's new in 0.4.3
+
+**A safer dead man's switch.** `set_dead_man_switch` now arms at least 30 seconds ahead, above
+the time a signed command can take to be accepted. The result says that firing disarms it and
+that a refused arm protects nothing. `get_market` trades carry their `lineage`, and `get_account`
+shows the settled snapshot's state instead of `unknown`. The docs say what `accepted` means for
+IOC and FOK orders and give the exact shape of every account command.
+
 ## What's new in 0.4.2
 
 **A trading switch that works in every client.** Codex starts plugin servers with a short fixed
@@ -64,7 +72,7 @@ Season 2 is a fresh deployment, so everyone updates once and creates one new key
      and `codex plugin add fairvenue@fairvenue`, and restart Codex.
    - Cursor, VS Code, Claude Desktop and other `uvx` setups: run the server command once with
      `--refresh`, for example `uvx --refresh --from "fairvenue-schema6-agent[mcp] @ git+https://github.com/FairVenue/fairvenue-agent-kit@main#subdirectory=experimental/native-testnet" fairvenue-mcp --version`.
-     It prints `fairvenue-mcp 0.4.2`. Then restart the client.
+     It prints `fairvenue-mcp 0.4.3`. Then restart the client.
 2. **Create a new key.** Ask your agent *"Connect me to the FairVenue TESTNET"*.
    `connect_account` opens the key page. Sign in with Google and click
    **Create API key & download JSON**. Your account gets 1,000 test USDC once in season 2, right
@@ -289,7 +297,7 @@ Undo it with `rm ~/.fairvenue/settings.json`.
 | `close_position` | Closes all or part of the position with a reduce-only MARKET IOC. `dry_run` previews it. |
 | `cancel_order` | Cancels one order by the `order_id` from `place_order` or `get_account`. |
 | `cancel_all_orders` | Cancels every resting and FairLag-held order of the account at once. |
-| `set_dead_man_switch` | Heartbeat that cancels all working orders right after its deadline unless refreshed. |
+| `set_dead_man_switch` | Heartbeat that cancels all working orders right after its deadline unless refreshed. It arms at least 30 seconds ahead. Firing disarms it. A rejected arm protects nothing. |
 | `set_leverage` | Account leverage 1 to 100. It can fall only with no position and no working orders. |
 | `set_fee_mode` | FIXED or PNL. It changes only with no position and no working orders. |
 | `recover_pending_request` | Looks up an unknown outcome by its exact original. Never resends. |
@@ -319,7 +327,7 @@ resources at `fairvenue://guide/overview`, `setup`, `trading`, `recovery`, `hack
 
 | Status | Meaning |
 | --- | --- |
-| `accepted` | The exchange journaled it. An order then waits for FairLag. Orders carry their `order_id`. |
+| `accepted` | The exchange journaled it. That is not a fill: an IOC or FOK order that cannot fill ends `canceled` with 0 fills. An order then waits for FairLag, usually over by the time this returns. Orders carry their `order_id`. |
 | `rejected` | The exchange refused it. Nothing executed. |
 | `not_placed` | Nothing was placed, with a `reason`: `rejected`, `invalid_request`, `admission_closed` (with the reason in plain words) or `rate_limited`. A new request is safe. A refused leverage or fee-mode change explains the position and orders rule. |
 | `not_executed` | Its batch was voided. Nothing happened. |
@@ -411,6 +419,8 @@ Read tools carry `readOnlyHint` (`get_account` too: it changes nothing). Signing
   the operator's matching engine, not by the proof.
 - `get_account` shows the latest 64 orders and fills. FairLag-held orders are counted, never
   shown.
+- `get_market` depth (up to 20 levels per side) is a capacity, not a level count. Live books
+  often show only the reference LP's 5-level wall.
 - Public reads and signed calls share global rate limits with every participant: about 600
   signed reads a minute, 120 commands a minute in total, and 60 orders and account settings a
   minute per account. Public market reads are served from a short shared cache. Each order costs
