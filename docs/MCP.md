@@ -13,6 +13,14 @@ exact-original recovery rules, and it only talks to the approved HTTPS origin fr
 pins. This is an operator-run Arbitrum Sepolia TESTNET with mock USDC. It handles no real funds,
 does not connect to mainnet and never routes an order to another venue.
 
+## What's new in 0.4.5
+
+**Fills you can tell apart, and clear Windows errors.** `get_account` fills carry their
+`lineage` and journal `position`, so two partial fills of one order stay distinct and a fill
+keeps its identity when its batch settles. On native Windows the server now says to use WSL
+instead of failing with `invalid_input`. A `.gitattributes` keeps hash-pinned files LF on
+Windows checkouts.
+
 ## What's new in 0.4.4
 
 **A GTC order rests 1 hour by default, not 23.** A request that was stored but never reached
@@ -78,7 +86,7 @@ Season 2 is a fresh deployment, so everyone updates once and creates one new key
      and `codex plugin add fairvenue@fairvenue`, and restart Codex.
    - Cursor, VS Code, Claude Desktop and other `uvx` setups: run the server command once with
      `--refresh`, for example `uvx --refresh --from "fairvenue-schema6-agent[mcp] @ git+https://github.com/FairVenue/fairvenue-agent-kit@main#subdirectory=experimental/native-testnet" fairvenue-mcp --version`.
-     It prints `fairvenue-mcp 0.4.4`. Then restart the client.
+     It prints `fairvenue-mcp 0.4.5`. Then restart the client.
 2. **Create a new key.** Ask your agent *"Connect me to the FairVenue TESTNET"*.
    `connect_account` opens the key page. Sign in with Google and click
    **Create API key & download JSON**. Your account gets 1,000 test USDC once in season 2, right
@@ -295,7 +303,7 @@ Undo it with `rm ~/.fairvenue/settings.json`.
 | `disable_trading` | Stops signing for the session until `enable_trading`. |
 | `find_agent_key_downloads` | Lists downloaded TS2 keys with public fields only, for keys saved elsewhere. |
 | `import_agent_key` | Copies a key file into the profile (0600) and makes it active. Refuses V4 and season 1 keys. |
-| `get_account` | Reads balances, margin, PnL, position, fee mode, leverage, open orders and recent fills. Each fill includes its `lineage` and journal `position` as decimal strings alongside its settlement state. The account read is signed. |
+| `get_account` | Signed read: balances, margin, PnL, position, fee mode, leverage, open orders, recent fills and their settlement. |
 | `get_market` | Book, mark, midpoint, spread, recent trades with settlement state, fees, tick, step and admission. |
 | `get_price_history` | Native book midpoints or oracle marks with low, high and change. |
 | `wait_for_market_update` | Blocks until the market changes, the event loop for trading agents. |
