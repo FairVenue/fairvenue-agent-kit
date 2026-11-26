@@ -380,6 +380,9 @@ class McpTraderTests(unittest.IsolatedAsyncioTestCase):
         soft, settled = account["recent_fills"]
         self.assertEqual((soft["price"], soft["batch"]), ("80000.2", None))
         self.assertEqual(soft["settlement"], {"state": "operator_soft"})
+        self.assertNotEqual(
+            (soft["lineage"], soft["position"]), (settled["lineage"], settled["position"])
+        )
         self.assertTrue(settled["settlement"]["settle_tx"].endswith("22" * 32))
         self.assertEqual(account["last_settled_state"]["final"], False)
         # The signed snapshot has no state field. It must not read as "unknown".

@@ -195,7 +195,8 @@ def packaged_installation() -> bytes:
     data = files("fairvenue_schema6").joinpath(PACKAGED_PINS).read_bytes()
     if hashlib.sha256(data).hexdigest() != PACKAGED_INSTALLATION_SHA256:
         raise SetupError(
-            "The packaged deployment pins do not match their reviewed hash. Reinstall the kit."
+            "The packaged deployment pins do not match their reviewed hash. One cause is a git "
+            "checkout that converted line endings. Reinstall the kit from a fresh checkout."
         )
     return data
 

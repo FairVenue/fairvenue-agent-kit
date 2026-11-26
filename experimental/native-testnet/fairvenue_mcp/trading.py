@@ -380,6 +380,8 @@ def account_summary(context: dict[str, Any] | None, view: dict[str, Any]) -> dic
             "quantity": fill["quantity"],
             "fee": fill["fee"],
             "batch": None if fill["batch_number"] == "0" else fill["batch_number"],
+            "lineage": fill["lineage"],
+            "position": fill["position"],
             "settlement": settlement_view(fill["settlement"]),
         }
         for fill in view["fills"]

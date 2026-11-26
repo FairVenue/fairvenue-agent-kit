@@ -136,6 +136,11 @@ def _minutes(environ: Mapping[str, str], name: str, default: int, maximum: int) 
 
 def load_config(environ: Mapping[str, str] | None = None) -> Config:
     """Build the configuration from ``FAIRVENUE_*`` environment variables."""
+    if os.name == "nt":
+        raise ConfigError(
+            "Native Windows is not supported because key files need POSIX ownership checks. "
+            "Run the FairVenue MCP server inside WSL."
+        )
     env = os.environ if environ is None else environ
     home = _path(env.get("FAIRVENUE_HOME", "").strip() or DEFAULT_HOME)
     installation = env.get("FAIRVENUE_INSTALLATION_FILE", "").strip()
