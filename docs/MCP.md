@@ -295,7 +295,7 @@ Undo it with `rm ~/.fairvenue/settings.json`.
 | `disable_trading` | Stops signing for the session until `enable_trading`. |
 | `find_agent_key_downloads` | Lists downloaded TS2 keys with public fields only, for keys saved elsewhere. |
 | `import_agent_key` | Copies a key file into the profile (0600) and makes it active. Refuses V4 and season 1 keys. |
-| `get_account` | Signed read: balances, margin, PnL, position, fee mode, leverage, open orders, recent fills and their settlement. |
+| `get_account` | Reads balances, margin, PnL, position, fee mode, leverage, open orders and recent fills. Each fill includes its `lineage` and journal `position` as decimal strings alongside its settlement state. The account read is signed. |
 | `get_market` | Book, mark, midpoint, spread, recent trades with settlement state, fees, tick, step and admission. |
 | `get_price_history` | Native book midpoints or oracle marks with low, high and change. |
 | `wait_for_market_update` | Blocks until the market changes, the event loop for trading agents. |
