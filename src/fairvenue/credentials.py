@@ -17,6 +17,32 @@ _AGENT = re.compile(r"^agent_[a-z0-9]{1,64}$")
 _SEED = re.compile(r"^[0-9a-f]{64}$")
 
 
+def _check_directory_stat(stat: os.stat_result) -> None:
+    if stat.st_uid != os.getuid() or stat.st_mode & 0o022:
+        raise CredentialsError(
+            "credential directory must be yours and not writable by group or others"
+        )
+
+
+def check_credential_directory(path: str | os.PathLike[str]) -> None:
+    """Refuse an existing directory where another user could replace the credential file."""
+    if os.name == "posix" and Path(path).exists():
+        _check_directory_stat(Path(path).stat())
+
+
+def _write_exclusive(path: Path, flags: int, payload: str, directory: int | None) -> None:
+    try:
+        descriptor = os.open(path, flags, 0o600, dir_fd=directory)
+    except FileExistsError as error:
+        raise CredentialsError("credential file already exists") from error
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            output.write(payload)
+    except BaseException:
+        os.unlink(path, dir_fd=directory)
+        raise
+
+
 @dataclass(frozen=True, slots=True)
 class Credentials:
     """Account identifiers and a local Ed25519 seed."""
@@ -43,13 +69,19 @@ class Credentials:
     @classmethod
     def from_file(cls, path: str | os.PathLike[str]) -> Credentials:
         credential_path = Path(path)
-        stat = credential_path.stat()
-        if os.name == "posix" and stat.st_mode & 0o077:
-            raise CredentialsError("credential file must not be accessible by group or others")
         try:
-            raw = json.loads(credential_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as error:
+            descriptor = os.open(credential_path, os.O_RDONLY)
+        except FileNotFoundError:
+            raise
+        except OSError as error:
             raise CredentialsError("credential file could not be read") from error
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            if os.name == "posix" and os.fstat(handle.fileno()).st_mode & 0o077:
+                raise CredentialsError("credential file must not be accessible by group or others")
+            try:
+                raw = json.loads(handle.read())
+            except (OSError, json.JSONDecodeError) as error:
+                raise CredentialsError("credential file could not be read") from error
         if not isinstance(raw, dict) or set(raw) != {
             "api_url",
             "environment",
@@ -62,20 +94,24 @@ class Credentials:
 
     def write_new(self, path: str | os.PathLike[str]) -> None:
         credential_path = Path(path)
-        credential_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if os.name == "posix":
-            credential_path.parent.chmod(0o700)
+        parent = credential_path.parent
+        created = not parent.exists()
+        parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         payload = json.dumps(asdict(self), indent=2, sort_keys=True) + "\n"
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if os.name != "posix":
+            _write_exclusive(credential_path, flags, payload, None)
+            return
+        directory = os.open(
+            parent, os.O_RDONLY | os.O_DIRECTORY | (os.O_NOFOLLOW if created else 0)
+        )
         try:
-            descriptor = os.open(credential_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError as error:
-            raise CredentialsError("credential file already exists") from error
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-                output.write(payload)
-        except BaseException:
-            credential_path.unlink(missing_ok=True)
-            raise
+            if created:
+                os.fchmod(directory, 0o700)
+            _check_directory_stat(os.fstat(directory))
+            _write_exclusive(Path(credential_path.name), flags | os.O_NOFOLLOW, payload, directory)
+        finally:
+            os.close(directory)
 
     def redacted(self) -> dict[str, Any]:
         return {

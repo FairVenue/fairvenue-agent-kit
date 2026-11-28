@@ -128,6 +128,10 @@ class FairVenueClient:
         token = self.auth_token() if request_type in _PRIVATE_INFO else None
         return self._post("/api/v1/info", request, token)
 
+    def forget_auth_token(self) -> None:
+        self._token = None
+        self._token_expires_at = 0
+
     def auth_token(self) -> str:
         credentials = self._require_credentials()
         now = time.time_ns() // 1_000_000

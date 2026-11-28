@@ -354,6 +354,13 @@ class McpTraderTests(unittest.IsolatedAsyncioTestCase):
         for change, message in cases:
             with self.subTest(change=change), self.assertRaisesRegex(ToolProblem, message):
                 await trader.place(dry_run=False, **{**ORDER, **change})
+        # Slippage at the limit counts from the best ask, so the worst price passes the
+        # midpoint limit by half the spread. The refusal names the slippage that does fit.
+        with self.assertRaisesRegex(ToolProblem, r"at most \d+ bps fits now") as refused:
+            await trader.place(dry_run=True, **{**ORDER, **dict(MARKET, max_slippage_bps=100)})
+        usable = int(str(refused.exception).split("at most ")[1].split(" bps")[0])
+        self.assertGreater(usable, 0)
+        await trader.place(dry_run=True, **{**ORDER, **dict(MARKET, max_slippage_bps=usable)})
         with self.assertRaisesRegex(ToolProblem, "0x order ID"):
             await trader.cancel(order_id="17")
         with self.assertRaisesRegex(ToolProblem, "from 1 to 100"):

@@ -13,6 +13,14 @@ exact-original recovery rules, and it only talks to the approved HTTPS origin fr
 pins. This is an operator-run Arbitrum Sepolia TESTNET with mock USDC. It handles no real funds,
 does not connect to mainnet and never routes an order to another venue.
 
+## What's new in 0.4.6
+
+**A clearer MARKET slippage refusal.** Slippage counts from the best opposite price, and the
+worst price must also stay within the price-distance limit of the midpoint. A refusal now names
+the slippage that fits. The Python SDK stream waits before every reconnect, retries abnormal
+closes and stops on a refused token, and writing a credential file no longer changes the mode of
+an existing directory.
+
 ## What's new in 0.4.5
 
 **Fills you can tell apart, and clear Windows errors.** `get_account` fills carry their
@@ -86,7 +94,7 @@ Season 2 is a fresh deployment, so everyone updates once and creates one new key
      and `codex plugin add fairvenue@fairvenue`, and restart Codex.
    - Cursor, VS Code, Claude Desktop and other `uvx` setups: run the server command once with
      `--refresh`, for example `uvx --refresh --from "fairvenue-schema6-agent[mcp] @ git+https://github.com/FairVenue/fairvenue-agent-kit@main#subdirectory=experimental/native-testnet" fairvenue-mcp --version`.
-     It prints `fairvenue-mcp 0.4.5`. Then restart the client.
+     It prints `fairvenue-mcp 0.4.6`. Then restart the client.
 2. **Create a new key.** Ask your agent *"Connect me to the FairVenue TESTNET"*.
    `connect_account` opens the key page. Sign in with Google and click
    **Create API key & download JSON**. Your account gets 1,000 test USDC once in season 2, right

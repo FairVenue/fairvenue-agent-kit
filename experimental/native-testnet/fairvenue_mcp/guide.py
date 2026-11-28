@@ -134,8 +134,9 @@ cancels the rest) or FOK (fills completely or not at all). A GTC order rests 1 h
 default (FAIRVENUE_GTC_LIFETIME_MINUTES), never past the key's expiry.
 - order_type MARKET takes no price. It is IOC (default) or FOK and signs a worst price \
 max_slippage_bps beyond the best opposite price, or beyond the mark when that side is empty. \
-The default is 50 bps (0.5%, the Arena terminal's bound). It may not exceed the price-distance \
-limit.
+The default is 50 bps (0.5%, the Arena terminal's bound). The worst price must also stay within \
+the price-distance limit of the midpoint, so the usable maximum is about that limit minus half \
+the spread.
 - close_position closes the whole position, or the quantity you name, with a reduce-only \
 MARKET IOC. It can only shrink the position, so the size and notional limits do not apply.
 - An accepted order returns its order_id. Keep it: cancel_order takes it. get_account and \

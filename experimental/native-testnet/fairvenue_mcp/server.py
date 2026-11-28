@@ -96,8 +96,10 @@ ReduceOnly = Annotated[bool, Field(description="Only reduce an existing position
 Slippage = Annotated[
     Annotated[int, Field(ge=1, le=1000)] | None,
     Field(
-        description="MARKET only: the worst price in basis points beyond the reference, 1 to "
-        "1000. Default 50 (0.5%). It may not exceed the price-distance limit.",
+        description="MARKET only: the worst price in basis points beyond the best opposite "
+        "price, 1 to 1000. Default 50 (0.5%). The worst price must also stay within the "
+        "price-distance limit of the midpoint, so the usable maximum is about that limit minus "
+        "half the spread.",
     ),
 ]
 DryRun = Annotated[bool, Field(description="Validate and show the exact order without signing.")]

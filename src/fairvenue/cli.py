@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
+import os
 import secrets
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,7 @@ from urllib.parse import urlparse
 import httpx
 
 from .client import FairVenueClient
-from .credentials import Credentials
+from .credentials import Credentials, check_credential_directory
 from .errors import FairVenueError
 from .signing import public_key
 
@@ -39,8 +40,14 @@ def init_local(args: argparse.Namespace) -> int:
     if not _is_loopback(args.base_url):
         raise FairVenueError("init-local is restricted to loopback API URLs")
     destination = Path(args.credentials)
-    if destination.exists():
+    if os.path.lexists(destination):
         raise FairVenueError("credential file already exists")
+    existing = destination.absolute().parent
+    while not existing.exists():
+        existing = existing.parent
+    if not existing.is_dir() or not os.access(existing, os.W_OK | os.X_OK):
+        raise FairVenueError("credential directory is not writable")
+    check_credential_directory(destination.absolute().parent)
     seed = secrets.token_hex(32)
     with httpx.Client(base_url=args.base_url.rstrip("/"), timeout=10.0) as client:
         created = _response(

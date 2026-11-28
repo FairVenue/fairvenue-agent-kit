@@ -1110,11 +1110,24 @@ class Trader:
             )
         deviation = abs(limit - reference) / reference * 10_000
         if deviation > limits.max_price_deviation_bps:
+            hint = ""
+            if market_order and base is not None:
+                bound = limits.max_price_deviation_bps
+                room = (
+                    reference * (10_000 + bound) / base - 10_000
+                    if side == "BUY"
+                    else 10_000 - reference * (10_000 - bound) / base
+                )
+                hint = (
+                    " Slippage counts from the best opposite price, but the worst price must stay "
+                    f"within the limit of the reference, so at most {max(int(room) - 1, 0)} bps "
+                    "fits now."
+                )
             raise ToolProblem(
                 f"{'worst price' if market_order else 'price'} {fmt(limit)} is "
                 f"{fmt(deviation.quantize(Decimal('0.1')))} bps from the reference "
                 f"{fmt(reference)}, beyond the configured {fmt(limits.max_price_deviation_bps)} "
-                "bps (FAIRVENUE_MAX_PRICE_DEVIATION_BPS)."
+                f"bps (FAIRVENUE_MAX_PRICE_DEVIATION_BPS).{hint}"
             )
         if post_only and side == "BUY" and market.best_ask and limit >= market.best_ask.price:
             raise ToolProblem(
