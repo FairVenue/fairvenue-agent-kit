@@ -406,6 +406,24 @@ class McpTraderTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(empty["account"])
         self.assertIn("1,000 test USDC", empty["note"])
 
+    async def test_get_account_keeps_partial_fill_positions_across_settlement(self) -> None:
+        trader = await self.ready()
+        first = dict(self.fixture.view["fills"][0], quantity_lots="1", fee="0.0096")
+        fills = [dict(first, position="15"), first]
+        self.fixture.view["fills"] = fills
+        pending = (await trader.account())["recent_fills"]
+
+        for fill in fills:
+            fill.update(batch_number="7", settlement={"state": "operator_sealed"})
+        sealed = (await trader.account())["recent_fills"]
+
+        self.assertEqual(pending[0]["settlement"]["state"], "operator_soft")
+        self.assertEqual(sealed[0]["settlement"]["state"], "operator_sealed")
+        for rows in (pending, sealed):
+            self.assertEqual(
+                [(row["lineage"], row["position"]) for row in rows], [("1", "15"), ("1", "14")]
+            )
+
     async def test_one_signed_context_read_per_order(self) -> None:
         trader = await self.ready()
         before = self.fixture.calls["context"]
